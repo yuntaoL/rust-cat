@@ -1,0 +1,15 @@
+# rust-cat rustfmt configuration (stable options only)
+# Good, readable defaults for a CLI/TUI project
+
+edition = "2024"
+max_width = 100
+use_small_heuristics = "Default"
+use_try_shorthand = true
+use_field_init_shorthand = true
+
+# Stable import organization
+reorder_imports = true
+
+# Misc stable niceties
+newline_style = "Unix"
+remove_nested_parens = true

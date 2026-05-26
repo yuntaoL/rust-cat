@@ -1,0 +1,143 @@
+# rust-cat - Comprehensive .gitignore
+# Generated for a modern Rust CLI/TUI project (2026)
+
+# =============================================================================
+# Rust / Cargo
+# =============================================================================
+/target/
+**/*.rs.bk
+Cargo.lock
+# Uncomment if you want to ignore lockfile for a library crate
+# (we keep it for the binary crate)
+
+# =============================================================================
+# Build artifacts & caches
+# =============================================================================
+**/*.o
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.rlib
+**/*.rmeta
+**/*.pdb
+**/*.exe
+**/*.exp
+**/*.lib
+
+# =============================================================================
+# Editor / IDE
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+*.code-workspace
+
+# =============================================================================
+# macOS
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# =============================================================================
+# Linux
+# =============================================================================
+*~
+.directory
+.Trash-*
+
+# =============================================================================
+# Windows
+# =============================================================================
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# =============================================================================
+# Secrets & credentials (never commit)
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+*.token
+
+# =============================================================================
+# Logs & temporary files
+# =============================================================================
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+/tmp/
+*.orig
+
+# =============================================================================
+# Test & benchmark artifacts
+# =============================================================================
+/benches/target/
+/tests/fixtures/large-*.bin
+/tests/fixtures/huge-*.bin
+*.profraw
+*.profdata
+
+# =============================================================================
+# Packaging / distribution
+# =============================================================================
+/dist/
+/release/
+/*.tar.gz
+/*.zip
+
+# =============================================================================
+# Misc
+# =============================================================================
+# Rust-analyzer / rustc
+rust-project.json
+
+# cargo-expand
+expanded.rs
+
+# cargo-udeps / cargo-machete leftovers
+unused-deps.txt
+
+# Local development notes (personal)
+NOTES.md
+TODO-personal.md
+.scratch/

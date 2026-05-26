@@ -1,0 +1,7 @@
+[package]
+name = "rcat-viewers-hex"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Built-in hex + ASCII viewer implementation for rcat"

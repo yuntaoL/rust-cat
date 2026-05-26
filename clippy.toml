@@ -1,0 +1,5 @@
+# rust-cat clippy configuration (valid for current clippy)
+# We keep it minimal in early phases and rely on `cargo clippy -- -D warnings` in CI.
+
+# Example of future stricter config:
+# msrv = "1.85"

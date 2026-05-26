@@ -1,0 +1,11 @@
+[package]
+name = "rcat-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Ratatui-based interactive TUI for rcat"
+
+[dependencies]
+# ratatui = { workspace = true }
+# crossterm = { workspace = true }

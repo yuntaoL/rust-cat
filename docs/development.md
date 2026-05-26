@@ -1,0 +1,76 @@
+# Development Guide for rust-cat
+
+This is the local development handbook.
+
+## Environment
+
+- Rust 1.85+ (edition 2024)
+- Recommended terminals for full Unicode + color: Ghostty, Kitty, WezTerm, iTerm2, Alacritty
+- `just` (highly recommended for DX)
+- `cargo-watch` (optional but nice): `cargo install cargo-watch`
+
+## Common Commands
+
+Use `just` (see root justfile):
+
+```bash
+just check
+just lint
+just test
+just run some-file.txt
+just run -- --hex -o 0x200 firmware.bin
+```
+
+Without just:
+
+```bash
+cargo check --workspace
+cargo clippy --workspace -- -D warnings
+cargo fmt -- --check
+cargo test --workspace
+cargo run --bin rcat -- README.md
+```
+
+## Architecture Notes
+
+See the full design in the plan document (session `plan.md` during active development, or `docs/plan.md` snapshot in the repo).
+
+Core principles:
+- Unified byte offset as the single source of truth for navigation.
+- `memmap2` for all file-backed viewing (zero-copy, OS paging).
+- Ratatui best practices: pure `update(Action)` + pure `render(&Frame, &App)`.
+- `Viewer` trait is the primary extension point.
+
+## Large File Testing
+
+Create test fixtures:
+
+```bash
+# 100MB random file
+dd if=/dev/urandom of=tests/fixtures/large-random.bin bs=1m count=100
+
+# Text log
+yes "this is a very long line of text for scrolling tests" | head -n 500000 > tests/fixtures/large-log.txt
+```
+
+Run with `just run-release tests/fixtures/large-*.bin` and verify startup < ~150ms and smooth scrolling.
+
+## Debugging the TUI
+
+- `RUST_LOG=debug cargo run ...` (once tracing is wired)
+- Use `better-panic` or `color-backtrace` on panic in debug builds.
+- Resize the terminal frequently while developing.
+
+## Adding Dependencies
+
+Prefer workspace-level dependencies in root `Cargo.toml`.
+
+Keep the dependency graph small in v0.1. Heavy crates (syntect, tree-sitter, image decoders) go behind feature flags.
+
+## Release Process (Maintainers)
+
+See Section 13 of the plan and the release GitHub workflow.
+
+## Questions?
+
+Open a Discussion or issue, or ping the maintainer.

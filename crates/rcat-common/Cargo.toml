@@ -1,0 +1,7 @@
+[package]
+name = "rcat-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Small shared utilities for the rust-cat workspace"

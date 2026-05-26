@@ -1,0 +1,11 @@
+[package]
+name = "rcat-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core domain types, file detection, and Viewer trait for rcat"
+
+[dependencies]
+# memmap2 = { workspace = true }
+# thiserror = { workspace = true }

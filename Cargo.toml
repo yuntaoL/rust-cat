@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/rcat",
+    "crates/rcat-cli",
+    "crates/rcat-core",
+    "crates/rcat-tui",
+    "crates/rcat-viewers-text",
+    "crates/rcat-viewers-hex",
+    "crates/rcat-common",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Yuntao Lu"]
+license = "MIT"
+repository = "https://github.com/yuntaolu/rust-cat"
+description = "A modern, extensible terminal file viewer — text, hex, and beyond"
+readme = "README.md"
+keywords = ["cli", "tui", "hex", "pager", "file-viewer", "ratatui"]
+categories = ["command-line-utilities", "visualization"]
+
+[workspace.dependencies]
+# Core
+clap = { version = "4.6", features = ["derive", "env", "unicode", "wrap_help"] }
+anyhow = "1.0"
+thiserror = "2.0"
+
+# TUI (will be enabled when rcat-tui is wired)
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+
+# File handling
+memmap2 = "0.9"
+
+# Utilities
+directories = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Logging (future)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing / dev
+insta = "1.39"
+proptest = "1.6"

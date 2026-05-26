@@ -1,0 +1,11 @@
+[package]
+name = "rcat-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CLI argument parsing and orchestration for rcat"
+
+[dependencies]
+# Will depend on rcat-core once wired
+# clap = { workspace = true }

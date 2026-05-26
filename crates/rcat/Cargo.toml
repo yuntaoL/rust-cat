@@ -1,0 +1,25 @@
+[package]
+name = "rcat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "rcat"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+# Internal crates (will be activated progressively)
+# rcat-cli = { path = "../rcat-cli" }
+# rcat-core = { path = "../rcat-core" }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
