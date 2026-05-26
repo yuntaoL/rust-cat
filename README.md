@@ -93,7 +93,16 @@ Hex mode has additional column navigation (`h`/`l`) and goto (`Ctrl-j`).
 
 We are now entering **Phase 1** (core foundations: `FileInfo`, detection, real `Viewer` trait).
 
-See [docs/plan.md](docs/plan.md) for status and the full high-level design (authoritative living version maintained in active development session).
+**The full project plan** (including the detailed list of work items for every implementation phase) lives in **[docs/plan.md](docs/plan.md)**. This is the canonical document.
+
+It contains:
+- Program definition & scope
+- Architecture (Viewer trait, unified navigation model, extensibility strategy)
+- **Concrete deliverables for Phase 0 through Phase 5**
+- Verification & quality requirements
+- GitHub / DevEx / CI recommendations
+
+Read the plan first if you want to understand the roadmap or contribute to a specific phase.
 
 ---
 
