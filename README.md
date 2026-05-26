@@ -89,9 +89,11 @@ Hex mode has additional column navigation (`h`/`l`) and goto (`Ctrl-j`).
 
 ## Project Status
 
-**Current phase**: Early development (plan complete, implementation starting).
+**Phase 0 complete** (2026-05-26): Professional Git + GitHub scaffolding + full workspace layout + working `rcat --version` / `--help` / non-interactive dump binary.
 
-See [plan.md](docs/plan.md) for the full high-level design, architecture, extensibility strategy, and phased roadmap.
+We are now entering **Phase 1** (core foundations: `FileInfo`, detection, real `Viewer` trait).
+
+See [docs/plan.md](docs/plan.md) for status and the full high-level design (authoritative living version maintained in active development session).
 
 ---
 
