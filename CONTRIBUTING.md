@@ -54,6 +54,28 @@ Protocol (to be fully specified in v0.2):
 
 This design allows plugins in any language while keeping the core safe and fast.
 
+## Code Formatting
+
+We enforce consistent code formatting using `rustfmt` with the settings defined in [rustfmt.toml](rustfmt.toml).
+
+**Before committing any code**, always run:
+
+```bash
+just fmt
+# or equivalently
+cargo fmt --all
+```
+
+The CI pipeline includes a dedicated **Format** job that runs `cargo fmt --all -- --check`. Any PR that fails this check will be blocked.
+
+### Why strict formatting matters
+
+- Reduces noise in code reviews (no more "formatting nits" comments).
+- Prevents the all-too-common situation where good contributions are blocked purely because of formatting drift.
+- Makes the codebase feel polished and professional.
+
+**Tip**: Configure your editor to run `cargo fmt` on save. Many people also set up a pre-commit hook (see the [justfile](justfile) for convenient recipes).
+
 ## Code Style & Quality
 
 - Run `just lint` (or `cargo fmt -- --check` + `cargo clippy -- -D warnings`) before every PR.
