@@ -9,6 +9,17 @@ use crate::file_info::FileInfo;
 use crate::probe::FileProbe;
 
 /// How strongly a viewer wants to handle a particular file.
+///
+/// ## Priority Convention (Important for Extensibility)
+///
+/// - **Specialized viewers** (e.g. `JsonViewer`, `ElfViewer`, `PngViewer`) may return
+///   `Preferred` when they have a strong, specific match.
+/// - **Default/generic viewers** (`TextViewer` and `HexViewer`) should **never** return
+///   higher than `Normal`. They are intended as fallbacks so that more specific
+///   viewers can take priority when appropriate.
+///
+/// This convention prevents priority collisions when multiple viewers could
+/// theoretically handle the same file (e.g. a JSON file is both "Text" and "JSON").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ViewerPriority {
     /// This viewer cannot handle the file at all.

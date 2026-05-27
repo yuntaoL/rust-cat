@@ -10,7 +10,9 @@ pub mod dump;
 pub mod file_info;
 pub mod probe;
 pub mod viewer;
+pub mod viewer_registry;
 
 pub use file_info::FileInfo;
 pub use probe::{FileProbe, FileProbeWithInfo, PrefixProbe, DETECTION_READ_LIMIT};
 pub use viewer::{FileViewer, ViewerPriority};
+pub use viewer_registry::ViewerRegistry;

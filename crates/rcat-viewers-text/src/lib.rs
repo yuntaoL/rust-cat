@@ -25,12 +25,14 @@ impl FileViewer for TextViewer {
     }
 
     fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
-        // Thanks to the core's first-pass detection (using `infer`), most of the
-        // hard work is already done. We can simply trust the preliminary result.
+        // IMPORTANT: The default TextViewer deliberately returns at most `Normal`.
+        // See the documentation on `ViewerPriority` for the reasoning.
+        // Specialized viewers (JsonViewer, MarkdownViewer, etc.) should return
+        // `Preferred` when they have a strong match.
         let prelim = probe.preliminary();
 
         match prelim.kind {
-            rcat_core::file_info::ContentKind::Text => ViewerPriority::Preferred,
+            rcat_core::file_info::ContentKind::Text => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Low,
         }
@@ -46,11 +48,10 @@ impl FileViewer for TextViewer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
     use tempfile::NamedTempFile;
 
     fn write_temp(content: &[u8]) -> NamedTempFile {
-        let mut f = NamedTempFile::new().unwrap();
+        let f = NamedTempFile::new().unwrap();
         std::fs::write(f.path(), content).unwrap();
         f
     }
@@ -63,7 +64,8 @@ mod tests {
         let mut probe = rcat_core::probe::FileProbeWithInfo::new(&info, prefix);
 
         let viewer = TextViewer;
-        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Preferred);
+        // Default TextViewer is intentionally conservative (max Normal)
+        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Normal);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
-use rcat_core::{dump, FileViewer};
+use rcat_core::{dump, FileViewer, ViewerRegistry};
 use rcat_viewers_hex::HexViewer;
 use rcat_viewers_text::TextViewer;
 use std::io::IsTerminal;
@@ -126,30 +126,37 @@ fn main() -> anyhow::Result<()> {
                 length: cli.length,
             };
 
-            let text_viewer = TextViewer;
-            let hex_viewer = HexViewer;
-
             // Build a probe that gives viewers limited + cached access to raw bytes
             let prefix_probe = PrefixProbe::from_path(path)?;
             let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
 
-            let viewer: &dyn FileViewer = match mode {
-                ViewMode::Hex => &hex_viewer,
-                ViewMode::Text => &text_viewer,
-                ViewMode::Auto => {
-                    // Let the viewers decide using the probe (they can read up to 16KB)
-                    let text_prio = text_viewer.can_handle(&mut probe);
-                    // We need a fresh probe for the second viewer because &mut dyn
-                    // We recreate it cheaply (it only holds a small Vec).
-                    let prefix_probe2 = PrefixProbe::from_path(path)?;
-                    let mut probe2 = FileProbeWithInfo::new(&info, prefix_probe2);
-                    let hex_prio = hex_viewer.can_handle(&mut probe2);
+            // Use the registry to select the best viewer for the job
+            let mut registry = ViewerRegistry::new();
+            registry.register(Box::new(TextViewer));
+            registry.register(Box::new(HexViewer));
 
-                    if hex_prio > text_prio {
-                        &hex_viewer
-                    } else {
-                        &text_viewer
-                    }
+            let viewer: &dyn FileViewer = match mode {
+                ViewMode::Hex => {
+                    registry
+                        .all_viewers()
+                        .iter()
+                        .find(|v| v.name() == "Hex")
+                        .map(|v| v.as_ref())
+                        .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref())
+                }
+                ViewMode::Text => {
+                    registry
+                        .all_viewers()
+                        .iter()
+                        .find(|v| v.name() == "Text")
+                        .map(|v| v.as_ref())
+                        .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref())
+                }
+                ViewMode::Auto => {
+                    // Let the registry pick the best viewer using the probe
+                    registry
+                        .find_best(&mut probe)
+                        .expect("at least one viewer should be registered")
                 }
             };
 

@@ -25,12 +25,14 @@ impl FileViewer for HexViewer {
     }
 
     fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
-        // The core already did the heavy lifting with `infer`.
-        // We can simply trust its preliminary classification for most cases.
+        // IMPORTANT: The default HexViewer deliberately returns at most `Normal`.
+        // See the documentation on `ViewerPriority` for the reasoning.
+        // Specialized binary viewers (ElfViewer, ImageViewer, ArchiveViewer, etc.)
+        // should return `Preferred` when they have a strong match.
         let prelim = probe.preliminary();
 
         match prelim.kind {
-            rcat_core::file_info::ContentKind::Binary => ViewerPriority::Preferred,
+            rcat_core::file_info::ContentKind::Binary => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Text => ViewerPriority::Low,
         }
@@ -48,7 +50,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     fn write_temp(content: &[u8]) -> NamedTempFile {
-        let mut f = NamedTempFile::new().unwrap();
+        let f = NamedTempFile::new().unwrap();
         std::fs::write(f.path(), content).unwrap();
         f
     }
@@ -61,7 +63,8 @@ mod tests {
         let mut probe = rcat_core::probe::FileProbeWithInfo::new(&info, prefix);
 
         let viewer = HexViewer;
-        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Preferred);
+        // Default HexViewer is intentionally conservative (max Normal)
+        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Normal);
     }
 
     #[test]
