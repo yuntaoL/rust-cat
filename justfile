@@ -44,6 +44,28 @@ clean:
 doc:
     cargo doc --workspace --no-deps --open
 
+# --- Coverage -----------------------------------------------------------------
+# Uses cargo-llvm-cov (modern, accurate, and well-supported)
+
+# Minimum line coverage threshold (update this when we raise the bar)
+COVERAGE_THRESHOLD := "50"
+
+# Generate an HTML coverage report locally
+coverage:
+    cargo install cargo-llvm-cov --locked
+    cargo llvm-cov --workspace --all-features --html
+    @echo ""
+    @echo "Coverage report generated:"
+    @echo "  file://$(pwd)/target/llvm-cov/html/index.html"
+
+# Run coverage and fail if line coverage is below the threshold.
+# Intended for use in CI / release checks.
+# Current threshold: 50% (we plan to increase this to 75% later)
+coverage-check:
+    cargo install cargo-llvm-cov --locked
+    cargo llvm-cov --workspace --all-features --fail-under-lines {{COVERAGE_THRESHOLD}}
+    @echo "Coverage check passed (≥ {{COVERAGE_THRESHOLD}}% line coverage)"
+
 # Update dependencies
 update:
     cargo update
@@ -57,6 +79,7 @@ audit:
 release-check:
     just lint
     just test
+    just coverage-check
     cargo build --release --bin rcat
     @echo "Release build successful. Tag and push to trigger release workflow."
 

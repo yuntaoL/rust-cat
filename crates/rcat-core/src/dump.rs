@@ -164,4 +164,39 @@ mod tests {
         assert!(s.contains("hello"));
         assert!(s.contains("world"));
     }
+
+    #[test]
+    fn dump_respects_offset_and_length() {
+        let data = b"0123456789ABCDEF";
+        let (_dir, path) = make_temp_file(data);
+
+        let info = FileInfo::from_path(&path).unwrap();
+        let mut out = Vec::new();
+        dump_hex(
+            &info,
+            &mut out,
+            &DumpOptions {
+                offset: 4,
+                length: Some(6),
+            },
+        )
+        .unwrap();
+
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("00000004:")); // correct address for offset 4
+        assert!(s.contains("04")); // the byte at offset 4 should appear
+        assert!(!s.contains("00000000:")); // should not show from start
+    }
+
+    #[test]
+    fn dump_text_adds_trailing_newline_when_needed() {
+        let data = b"no newline at end";
+        let (_dir, path) = make_temp_file(data);
+
+        let info = FileInfo::from_path(&path).unwrap();
+        let mut out = Vec::new();
+        dump_text(&info, &mut out, &DumpOptions::default()).unwrap();
+
+        assert!(out.ends_with(b"\n"));
+    }
 }

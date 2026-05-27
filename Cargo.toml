@@ -6,6 +6,7 @@ members = [
     "crates/rcat-tui",
     "crates/rcat-viewers-text",
     "crates/rcat-viewers-hex",
+    "crates/rcat-viewers-json",
     "crates/rcat-common",
 ]
 resolver = "2"

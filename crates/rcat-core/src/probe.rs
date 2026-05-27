@@ -133,3 +133,65 @@ impl FileProbe for FileProbeWithInfo<'_> {
         &self.info.detected
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn write_temp(data: &[u8]) -> NamedTempFile {
+        let f = NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), data).unwrap();
+        f
+    }
+
+    #[test]
+    fn prefix_probe_reads_within_limit() {
+        let data = b"hello world this is a test of the prefix probe";
+        let f = write_temp(data);
+        let mut probe = PrefixProbe::from_path(f.path()).unwrap();
+
+        assert_eq!(probe.file_size(), data.len() as u64);
+
+        let bytes = probe.read_bytes(0, 5).unwrap();
+        assert_eq!(bytes, b"hello");
+
+        let bytes = probe.read_bytes(6, 5).unwrap();
+        assert_eq!(bytes, b"world");
+    }
+
+    #[test]
+    fn prefix_probe_respects_detection_limit() {
+        // Create a file larger than DETECTION_READ_LIMIT
+        let large_data = vec![b'x'; DETECTION_READ_LIMIT + 100];
+        let f = write_temp(&large_data);
+        let mut probe = PrefixProbe::from_path(f.path()).unwrap();
+
+        // Should only have the first 16k
+        let bytes = probe.read_bytes(0, DETECTION_READ_LIMIT + 50).unwrap();
+        assert_eq!(bytes.len(), DETECTION_READ_LIMIT);
+    }
+
+    #[test]
+    fn prefix_probe_handles_offset_beyond_data() {
+        let data = b"short";
+        let f = write_temp(data);
+        let mut probe = PrefixProbe::from_path(f.path()).unwrap();
+
+        let bytes = probe.read_bytes(100, 10).unwrap();
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn file_probe_with_info_delegates_correctly() {
+        let data = b"abc123";
+        let f = write_temp(data);
+        let info = crate::FileInfo::from_path(f.path()).unwrap();
+        let prefix = PrefixProbe::from_path(f.path()).unwrap();
+        let mut probe = FileProbeWithInfo::new(&info, prefix);
+
+        assert_eq!(probe.file_size(), data.len() as u64);
+        assert_eq!(probe.read_bytes(0, 3).unwrap(), b"abc");
+        assert_eq!(probe.preliminary().kind, info.detected.kind);
+    }
+}

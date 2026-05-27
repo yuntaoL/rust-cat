@@ -17,6 +17,7 @@ Use `just` (see root justfile):
 just check
 just lint
 just test
+just coverage          # Generate HTML coverage report
 just run some-file.txt
 just run -- --hex -o 0x200 firmware.bin
 ```
@@ -29,6 +30,22 @@ cargo clippy --workspace -- -D warnings
 cargo fmt -- --check
 cargo test --workspace
 cargo run --bin rcat -- README.md
+```
+
+### Code Coverage
+
+We use `cargo-llvm-cov` for coverage reporting.
+
+```bash
+just coverage          # Generates HTML report in target/llvm-cov/html/
+```
+
+In CI we enforce a minimum line coverage (currently **50%**, planned to increase to **75%**).
+
+To run the CI-style check locally:
+
+```bash
+just coverage-check
 ```
 
 ## Architecture Notes

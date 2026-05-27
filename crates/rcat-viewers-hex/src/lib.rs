@@ -3,7 +3,7 @@
 //! Produces classic, correct hex + ASCII output (16 bytes per line with proper padding).
 //! This is the default for binary files and is designed for high visual and data correctness.
 
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
@@ -46,6 +46,85 @@ impl FileViewer for HexViewer {
     ) -> std::io::Result<()> {
         // Delegate to the proven correct hex implementation in core.
         dump::dump_hex(info, writer, opts)
+    }
+
+    fn render_lines(
+        &self,
+        info: &FileInfo,
+        start_offset: u64,
+        max_rows: u16,
+        _width: u16,
+    ) -> Vec<String> {
+        use std::fs::File;
+        use std::io::Read;
+
+        if info.size == 0 {
+            return vec!["(empty file)".to_string()];
+        }
+
+        let mut file = match File::open(&info.path) {
+            Ok(f) => f,
+            Err(_) => return vec!["(error opening file)".to_string()],
+        };
+
+        let start = start_offset.min(info.size);
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return vec!["(seek error)".to_string()];
+        }
+
+        let bytes_to_read = (max_rows as u64 * 16).min(info.size - start) as usize;
+        let mut buffer = vec![0u8; bytes_to_read];
+        let read = file.read(&mut buffer).unwrap_or(0);
+        buffer.truncate(read);
+
+        let mut lines = Vec::new();
+        for (i, chunk) in buffer.chunks(16).enumerate() {
+            let addr = start + (i as u64 * 16);
+
+            let hex_part: String = chunk
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let ascii_part: String = chunk
+                .iter()
+                .map(|&b| {
+                    if (0x20..=0x7e).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+
+            lines.push(format!("{:08x}: {:<48} |{}", addr, hex_part, ascii_part));
+        }
+
+        if lines.is_empty() {
+            lines.push("(end of file)".to_string());
+        }
+
+        lines
+    }
+
+    fn advance_lines(&self, info: &FileInfo, current: u64, delta: i64, _width: u16) -> u64 {
+        let step: u64 = 16;
+        if delta >= 0 {
+            let next = current.saturating_add((delta as u64) * step);
+            next.min(info.size.saturating_sub(1))
+        } else {
+            current.saturating_sub(((-delta) as u64) * step)
+        }
+    }
+
+    fn status(&self, info: &FileInfo, pos: u64) -> String {
+        let pct = if info.size == 0 {
+            100
+        } else {
+            ((pos as f64 / info.size as f64) * 100.0) as u32
+        };
+        format!("Hex  0x{:08x} / {}%", pos, pct)
     }
 }
 
@@ -90,5 +169,20 @@ mod tests {
         // Last line should contain the final byte and have padding
         assert!(s.contains("10"));
         assert!(s.contains("|."));
+    }
+
+    #[test]
+    fn hex_render_lines_and_advance_work() {
+        let data: Vec<u8> = (0u8..=100).collect();
+        let f = write_temp(&data);
+        let info = FileInfo::from_path(f.path()).unwrap();
+
+        let viewer = HexViewer;
+
+        let lines = viewer.render_lines(&info, 0, 5, 80);
+        assert_eq!(lines.len(), 5);
+
+        let pos = viewer.advance_lines(&info, 0, 3, 80);
+        assert_eq!(pos, 48); // 3 rows * 16 bytes
     }
 }

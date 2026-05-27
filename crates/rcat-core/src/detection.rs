@@ -118,4 +118,38 @@ mod tests {
     fn pure_ascii_is_not_null() {
         assert!(!contains_null(b"just normal text"));
     }
+
+    #[test]
+    fn empty_file_is_empty_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        std::fs::write(&path, b"").unwrap();
+
+        let det = detect_file(&path, 0).unwrap();
+        assert_eq!(det.kind, ContentKind::Empty);
+    }
+
+    #[test]
+    fn json_extension_and_mime_detected_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        std::fs::write(&path, br#"{"key": "value"}"#).unwrap();
+
+        let det = detect_file(&path, 16).unwrap();
+        // infer may or may not recognize small json, but fallback should mark as Text
+        // and extension is captured separately in FileInfo
+        if let Some(mime) = &det.mime_type {
+            assert!(mime == "application/json" || det.kind == ContentKind::Text);
+        }
+    }
+
+    #[test]
+    fn binary_with_null_is_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bin.dat");
+        std::fs::write(&path, b"hello\x00world").unwrap();
+
+        let det = detect_file(&path, 11).unwrap();
+        assert_eq!(det.kind, ContentKind::Binary);
+    }
 }

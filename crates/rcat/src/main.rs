@@ -7,6 +7,7 @@ use rcat_core::file_info::FileInfo;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
 use rcat_core::{FileViewer, ViewerRegistry, dump};
 use rcat_viewers_hex::HexViewer;
+use rcat_viewers_json::JsonViewer;
 use rcat_viewers_text::TextViewer;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -90,6 +91,7 @@ fn main() -> anyhow::Result<()> {
         println!("Built-in viewers (v0.1):");
         println!("  text   - UTF-8 text pager with graceful fallback");
         println!("  hex    - Classic 16-byte hex + ASCII view (color-coded)");
+        println!("  json   - Pretty-printed JSON (specialized plugin example)");
         println!("\nMore viewers will be available via plugins in future releases.");
         return Ok(());
     }
@@ -118,56 +120,61 @@ fn main() -> anyhow::Result<()> {
     let use_stdout = cli.stdout || !is_stdout_tty;
 
     if let Some(path) = &cli.file {
+        let info = FileInfo::from_path(path)?;
+
+        // Build registry once
+        let mut registry = ViewerRegistry::new();
+        registry.register(Box::new(TextViewer));
+        registry.register(Box::new(HexViewer));
+        registry.register(Box::new(JsonViewer));
+
+        // Build probe for viewer selection (used in Auto mode)
+        let prefix_probe = PrefixProbe::from_path(path)?;
+        let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
+
+        let selected_viewer: &dyn FileViewer = match mode {
+            ViewMode::Hex => registry
+                .all_viewers()
+                .iter()
+                .find(|v| v.name() == "Hex")
+                .map(|v| v.as_ref())
+                .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
+            ViewMode::Text => registry
+                .all_viewers()
+                .iter()
+                .find(|v| v.name() == "Text")
+                .map(|v| v.as_ref())
+                .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
+            ViewMode::Auto => registry
+                .find_best(&mut probe)
+                .expect("at least one viewer should be registered"),
+        };
+
         if use_stdout {
-            // Full implementation using the real TextViewer / HexViewer
-            let info = FileInfo::from_path(path)?;
             let opts = dump::DumpOptions {
                 offset,
                 length: cli.length,
             };
 
-            // Build a probe that gives viewers limited + cached access to raw bytes
-            let prefix_probe = PrefixProbe::from_path(path)?;
-            let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
-
-            // Use the registry to select the best viewer for the job
-            let mut registry = ViewerRegistry::new();
-            registry.register(Box::new(TextViewer));
-            registry.register(Box::new(HexViewer));
-
-            let viewer: &dyn FileViewer = match mode {
-                ViewMode::Hex => registry
-                    .all_viewers()
-                    .iter()
-                    .find(|v| v.name() == "Hex")
-                    .map(|v| v.as_ref())
-                    .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
-                ViewMode::Text => registry
-                    .all_viewers()
-                    .iter()
-                    .find(|v| v.name() == "Text")
-                    .map(|v| v.as_ref())
-                    .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
-                ViewMode::Auto => {
-                    // Let the registry pick the best viewer using the probe
-                    registry
-                        .find_best(&mut probe)
-                        .expect("at least one viewer should be registered")
-                }
-            };
-
             let stdout = std::io::stdout();
             let mut lock = stdout.lock();
-            viewer.dump(&info, &mut lock, &opts)?;
+            selected_viewer.dump(&info, &mut lock, &opts)?;
         } else {
-            // Interactive TUI (not yet implemented)
-            println!("rcat TUI is not yet wired up (Phase 1 skeleton).");
-            println!("File: {}", path.display());
-            println!("Mode: {:?}", mode);
-            println!("Offset: 0x{:x}", offset);
-            println!(
-                "\nUse --stdout (or pipe the output) to get correct non-interactive dumping from the real viewers."
-            );
+            // Launch the interactive TUI with the chosen viewer
+            // We move the viewer into the TUI
+            let viewer: Box<dyn rcat_core::FileViewer> = match selected_viewer.name() {
+                "Hex" => Box::new(HexViewer),
+                "JSON" => Box::new(JsonViewer),
+                _ => Box::new(TextViewer),
+            };
+
+            let config = rcat_tui::TuiConfig {
+                info,
+                viewer,
+                initial_offset: offset,
+            };
+
+            rcat_tui::run_tui(config)?;
         }
     } else {
         // stdin path (future)
