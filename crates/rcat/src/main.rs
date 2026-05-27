@@ -2,15 +2,9 @@
 //!
 //! A modern, extensible terminal file viewer for text and binary files.
 
-// Phase 0 skeleton code — some clippy lints are intentionally suppressed here.
-#![allow(
-    clippy::needless_range_loop,   // the hex dump loops are clearer this way for now
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::enum_variant_names     // Shell::Bash etc. are intentionally the canonical names
-)]
-
 use clap::{Parser, Subcommand, ValueEnum};
+use rcat_core::{dump, FileInfo};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 /// rcat - A modern, extensible terminal file viewer (text, hex, and beyond)
@@ -76,6 +70,7 @@ enum Commands {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)] // Shell::Bash, Shell::Zsh etc. are the canonical names we want
 enum Shell {
     Bash,
     Zsh,
@@ -115,20 +110,29 @@ fn main() -> anyhow::Result<()> {
         ViewMode::Auto
     };
 
-    let use_stdout = cli.stdout || !atty::is(atty::Stream::Stdout);
+    let is_stdout_tty = std::io::stdout().is_terminal();
+    let use_stdout = cli.stdout || !is_stdout_tty;
 
     if let Some(path) = &cli.file {
         if use_stdout {
-            // Non-interactive path (Phase 0: simple implementation)
-            run_non_interactive(path, mode, offset, cli.length)?;
+            // High-quality non-interactive dump powered by rcat-core
+            let info = FileInfo::from_path(path)?;
+            let opts = dump::DumpOptions {
+                offset,
+                length: cli.length,
+            };
+            let force_hex = matches!(mode, ViewMode::Hex);
+
+            let stdout = std::io::stdout();
+            let mut lock = stdout.lock();
+            dump::dump(&info, &mut lock, force_hex, &opts)?;
         } else {
-            // Interactive TUI (not yet implemented in Phase 0)
-            println!("rcat TUI is not yet wired up (Phase 0 skeleton).");
+            // Interactive TUI (not yet implemented)
+            println!("rcat TUI is not yet wired up (Phase 0/1 skeleton).");
             println!("File: {}", path.display());
             println!("Mode: {:?}", mode);
             println!("Offset: 0x{:x}", offset);
-            println!("\nUse --stdout to force non-interactive output, or wait for the full TUI.");
-            println!("Example: rcat --stdout {}", path.display());
+            println!("\nUse --stdout (or pipe the output) to get correct non-interactive dumping.");
         }
     } else {
         // stdin path (future)
@@ -155,111 +159,6 @@ fn parse_offset(s: &str) -> anyhow::Result<u64> {
     }
 }
 
-fn run_non_interactive(
-    path: &PathBuf,
-    mode: ViewMode,
-    offset: u64,
-    length: Option<u64>,
-) -> anyhow::Result<()> {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader, Read};
 
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
 
-    // Skip to offset (simple seek for Phase 0; later use mmap)
-    if offset > 0 {
-        let mut skipped = 0u64;
-        let mut buf = [0u8; 8192];
-        while skipped < offset {
-            let to_read = std::cmp::min((offset - skipped) as usize, buf.len());
-            let n = reader.read(&mut buf[..to_read])?;
-            if n == 0 {
-                break;
-            }
-            skipped += n as u64;
-        }
-    }
 
-    let max_bytes = length.unwrap_or(u64::MAX);
-    let mut remaining = max_bytes;
-
-    match mode {
-        ViewMode::Text | ViewMode::Auto => {
-            // Simple text dump (Phase 0). Real version will do proper line handling + encoding.
-            let mut line = String::new();
-            while remaining > 0 {
-                line.clear();
-                let n = reader.read_line(&mut line)?;
-                if n == 0 {
-                    break;
-                }
-                let to_write = if (line.len() as u64) > remaining {
-                    remaining as usize
-                } else {
-                    line.len()
-                };
-                print!("{}", &line[..to_write]);
-                remaining = remaining.saturating_sub(to_write as u64);
-            }
-        }
-        ViewMode::Hex => {
-            // Basic hex + ASCII dump (xxd-like, Phase 0 quality)
-            let mut buf = vec![0u8; 16];
-            let mut addr = offset;
-            loop {
-                let n = reader.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-
-                print!("{:08x}: ", addr);
-                for i in 0..16 {
-                    if i < n {
-                        print!("{:02x} ", buf[i]);
-                    } else {
-                        print!("   ");
-                    }
-                    if i == 7 {
-                        print!(" ");
-                    }
-                }
-                print!(" |");
-                for i in 0..n {
-                    let c = buf[i];
-                    let ch = if (0x20..=0x7e).contains(&c) {
-                        c as char
-                    } else {
-                        '.'
-                    };
-                    print!("{}", ch);
-                }
-                println!("|");
-
-                addr += n as u64;
-                if (n as u64) > remaining {
-                    break;
-                }
-                remaining -= n as u64;
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// Small helper so we don't pull atty as a hard dep yet in Phase 0.
-// We can replace with a tiny isatty check or the `atty` crate later.
-mod atty {
-    pub enum Stream {
-        Stdout,
-    }
-    pub fn is(_: Stream) -> bool {
-        // Conservative: assume interactive unless we can prove otherwise.
-        // In real code we'd use libc isatty(1) or crossterm.
-        true
-    }
-}

@@ -15,10 +15,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 anyhow = { workspace = true }
-
-# Internal crates (will be activated progressively)
-# rcat-cli = { path = "../rcat-cli" }
-# rcat-core = { path = "../rcat-core" }
+rcat-core = { path = "../rcat-core" }
 
 [dev-dependencies]
 assert_cmd = "2.0"
