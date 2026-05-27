@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,21 +28,22 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: Test
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # Windows can be added once crossterm TUI pieces are wired
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
+      - name: Run tests
+        run: cargo test --workspace --all-features
 
   build:
     name: Build & Check
@@ -51,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets --all-features
-      - run: cargo build --release --bin rcat
-
-  # Future: add audit job with cargo-deny when we have deny.toml
+      - name: Cargo check
+        run: cargo check --workspace --all-targets --all-features
+      - name: Build release binary
+        run: cargo build --release --bin rcat
