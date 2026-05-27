@@ -2,6 +2,9 @@
 //!
 //! Phase 1: basic trait definition only. Real implementations come in later phases.
 
+use std::io::Write;
+
+use crate::dump::DumpOptions;
 use crate::file_info::FileInfo;
 
 /// How strongly a viewer wants to handle a particular file.
@@ -18,6 +21,9 @@ pub enum ViewerPriority {
 }
 
 /// Core trait that all viewers (built-in and plugins) must implement.
+///
+/// This trait is the primary extension point. Viewers are responsible for
+/// producing correct output (especially in non-interactive dump mode).
 pub trait FileViewer: Send + Sync {
     /// Human-readable name of this viewer (e.g. "Text", "Hex", "ELF").
     fn name(&self) -> &'static str;
@@ -25,7 +31,13 @@ pub trait FileViewer: Send + Sync {
     /// Return how suitable this viewer is for the given file.
     fn can_handle(&self, info: &FileInfo) -> ViewerPriority;
 
-    // Future methods (Phase 2+):
+    /// Dump the file content to the given writer using this viewer's format.
+    ///
+    /// This is the key method for correctness in non-interactive / piped usage.
+    /// Each viewer controls its exact output (text encoding handling, hex formatting, etc.).
+    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> std::io::Result<()>;
+
+    // Future (TUI phase):
     // fn render(&self, ctx: &RenderContext) -> Result<()>;
-    // fn handle_input(&mut self, key: KeyEvent) -> Action;
+    // fn handle_input(&mut self, event: KeyEvent) -> Action;
 }

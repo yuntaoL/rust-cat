@@ -16,6 +16,8 @@ path = "src/main.rs"
 clap = { workspace = true }
 anyhow = { workspace = true }
 rcat-core = { path = "../rcat-core" }
+rcat-viewers-text = { path = "../rcat-viewers-text" }
+rcat-viewers-hex = { path = "../rcat-viewers-hex" }
 
 [dev-dependencies]
 assert_cmd = "2.0"

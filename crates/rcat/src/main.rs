@@ -3,7 +3,10 @@
 //! A modern, extensible terminal file viewer for text and binary files.
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rcat_core::{dump, FileInfo};
+use rcat_core::file_info::FileInfo;
+use rcat_core::{dump, FileViewer};
+use rcat_viewers_hex::HexViewer;
+use rcat_viewers_text::TextViewer;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -115,24 +118,39 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(path) = &cli.file {
         if use_stdout {
-            // High-quality non-interactive dump powered by rcat-core
+            // Full implementation using the real TextViewer / HexViewer
             let info = FileInfo::from_path(path)?;
             let opts = dump::DumpOptions {
                 offset,
                 length: cli.length,
             };
-            let force_hex = matches!(mode, ViewMode::Hex);
+
+            let text_viewer = TextViewer;
+            let hex_viewer = HexViewer;
+
+            let viewer: &dyn FileViewer = match mode {
+                ViewMode::Hex => &hex_viewer,
+                ViewMode::Text => &text_viewer,
+                ViewMode::Auto => {
+                    // Let the viewers decide based on content
+                    if hex_viewer.can_handle(&info) > text_viewer.can_handle(&info) {
+                        &hex_viewer
+                    } else {
+                        &text_viewer
+                    }
+                }
+            };
 
             let stdout = std::io::stdout();
             let mut lock = stdout.lock();
-            dump::dump(&info, &mut lock, force_hex, &opts)?;
+            viewer.dump(&info, &mut lock, &opts)?;
         } else {
             // Interactive TUI (not yet implemented)
-            println!("rcat TUI is not yet wired up (Phase 0/1 skeleton).");
+            println!("rcat TUI is not yet wired up (Phase 1 skeleton).");
             println!("File: {}", path.display());
             println!("Mode: {:?}", mode);
             println!("Offset: 0x{:x}", offset);
-            println!("\nUse --stdout (or pipe the output) to get correct non-interactive dumping.");
+            println!("\nUse --stdout (or pipe the output) to get correct non-interactive dumping from the real viewers.");
         }
     } else {
         // stdin path (future)

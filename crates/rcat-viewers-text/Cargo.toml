@@ -5,3 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Built-in text viewer implementation for rcat"
+
+[dependencies]
+rcat-core = { path = "../rcat-core" }
+
+[dev-dependencies]
+tempfile = "3"
