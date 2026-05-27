@@ -4,6 +4,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rcat_core::file_info::FileInfo;
+use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
 use rcat_core::{dump, FileViewer};
 use rcat_viewers_hex::HexViewer;
 use rcat_viewers_text::TextViewer;
@@ -128,12 +129,23 @@ fn main() -> anyhow::Result<()> {
             let text_viewer = TextViewer;
             let hex_viewer = HexViewer;
 
+            // Build a probe that gives viewers limited + cached access to raw bytes
+            let prefix_probe = PrefixProbe::from_path(path)?;
+            let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
+
             let viewer: &dyn FileViewer = match mode {
                 ViewMode::Hex => &hex_viewer,
                 ViewMode::Text => &text_viewer,
                 ViewMode::Auto => {
-                    // Let the viewers decide based on content
-                    if hex_viewer.can_handle(&info) > text_viewer.can_handle(&info) {
+                    // Let the viewers decide using the probe (they can read up to 16KB)
+                    let text_prio = text_viewer.can_handle(&mut probe);
+                    // We need a fresh probe for the second viewer because &mut dyn
+                    // We recreate it cheaply (it only holds a small Vec).
+                    let prefix_probe2 = PrefixProbe::from_path(path)?;
+                    let mut probe2 = FileProbeWithInfo::new(&info, prefix_probe2);
+                    let hex_prio = hex_viewer.can_handle(&mut probe2);
+
+                    if hex_prio > text_prio {
                         &hex_viewer
                     } else {
                         &text_viewer

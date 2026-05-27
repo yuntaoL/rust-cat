@@ -7,6 +7,7 @@ use std::io::Write;
 
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
+use rcat_core::probe::FileProbe;
 use rcat_core::{FileViewer, ViewerPriority};
 
 /// The built-in viewer for human-readable text files.
@@ -23,8 +24,12 @@ impl FileViewer for TextViewer {
         "Text"
     }
 
-    fn can_handle(&self, info: &FileInfo) -> ViewerPriority {
-        match info.kind {
+    fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
+        // Thanks to the core's first-pass detection (using `infer`), most of the
+        // hard work is already done. We can simply trust the preliminary result.
+        let prelim = probe.preliminary();
+
+        match prelim.kind {
             rcat_core::file_info::ContentKind::Text => ViewerPriority::Preferred,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Low,
@@ -54,9 +59,11 @@ mod tests {
     fn text_viewer_prefers_text_files() {
         let f = write_temp(b"hello world\n");
         let info = FileInfo::from_path(f.path()).unwrap();
+        let prefix = rcat_core::probe::PrefixProbe::from_path(f.path()).unwrap();
+        let mut probe = rcat_core::probe::FileProbeWithInfo::new(&info, prefix);
 
         let viewer = TextViewer;
-        assert_eq!(viewer.can_handle(&info), ViewerPriority::Preferred);
+        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Preferred);
     }
 
     #[test]

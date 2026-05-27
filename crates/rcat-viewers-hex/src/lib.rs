@@ -7,6 +7,7 @@ use std::io::Write;
 
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
+use rcat_core::probe::FileProbe;
 use rcat_core::{FileViewer, ViewerPriority};
 
 /// The built-in viewer for binary / hex data.
@@ -23,8 +24,12 @@ impl FileViewer for HexViewer {
         "Hex"
     }
 
-    fn can_handle(&self, info: &FileInfo) -> ViewerPriority {
-        match info.kind {
+    fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
+        // The core already did the heavy lifting with `infer`.
+        // We can simply trust its preliminary classification for most cases.
+        let prelim = probe.preliminary();
+
+        match prelim.kind {
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Preferred,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Text => ViewerPriority::Low,
@@ -52,9 +57,11 @@ mod tests {
     fn hex_viewer_prefers_binary_files() {
         let f = write_temp(&[0u8, 1, 2, 0xff, 0x00]);
         let info = FileInfo::from_path(f.path()).unwrap();
+        let prefix = rcat_core::probe::PrefixProbe::from_path(f.path()).unwrap();
+        let mut probe = rcat_core::probe::FileProbeWithInfo::new(&info, prefix);
 
         let viewer = HexViewer;
-        assert_eq!(viewer.can_handle(&info), ViewerPriority::Preferred);
+        assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Preferred);
     }
 
     #[test]

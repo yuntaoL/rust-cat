@@ -6,6 +6,7 @@ use std::io::Write;
 
 use crate::dump::DumpOptions;
 use crate::file_info::FileInfo;
+use crate::probe::FileProbe;
 
 /// How strongly a viewer wants to handle a particular file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,7 +30,12 @@ pub trait FileViewer: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Return how suitable this viewer is for the given file.
-    fn can_handle(&self, info: &FileInfo) -> ViewerPriority;
+    ///
+    /// The `probe` allows the viewer to read a limited amount of raw data
+    /// (currently up to 16 KiB) with caching provided by the host.
+    /// This enables plugins to perform deep format-specific detection
+    /// without opening the file themselves.
+    fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority;
 
     /// Dump the file content to the given writer using this viewer's format.
     ///
