@@ -38,11 +38,13 @@ pub fn detect_file(path: &Path, size: u64) -> std::io::Result<PreliminaryDetecti
         let ext = kind.extension().to_string();
 
         // Derive coarse ContentKind from MIME
-        let coarse_kind = if mime.starts_with("text/") || mime == "application/json" || mime == "application/xml" {
-            ContentKind::Text
-        } else {
-            ContentKind::Binary
-        };
+        let coarse_kind =
+            if mime.starts_with("text/") || mime == "application/json" || mime == "application/xml"
+            {
+                ContentKind::Text
+            } else {
+                ContentKind::Binary
+            };
 
         return Ok(PreliminaryDetection {
             mime_type: Some(mime),

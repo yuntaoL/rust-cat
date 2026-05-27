@@ -5,7 +5,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
-use rcat_core::{dump, FileViewer, ViewerRegistry};
+use rcat_core::{FileViewer, ViewerRegistry, dump};
 use rcat_viewers_hex::HexViewer;
 use rcat_viewers_text::TextViewer;
 use std::io::IsTerminal;
@@ -136,22 +136,18 @@ fn main() -> anyhow::Result<()> {
             registry.register(Box::new(HexViewer));
 
             let viewer: &dyn FileViewer = match mode {
-                ViewMode::Hex => {
-                    registry
-                        .all_viewers()
-                        .iter()
-                        .find(|v| v.name() == "Hex")
-                        .map(|v| v.as_ref())
-                        .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref())
-                }
-                ViewMode::Text => {
-                    registry
-                        .all_viewers()
-                        .iter()
-                        .find(|v| v.name() == "Text")
-                        .map(|v| v.as_ref())
-                        .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref())
-                }
+                ViewMode::Hex => registry
+                    .all_viewers()
+                    .iter()
+                    .find(|v| v.name() == "Hex")
+                    .map(|v| v.as_ref())
+                    .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
+                ViewMode::Text => registry
+                    .all_viewers()
+                    .iter()
+                    .find(|v| v.name() == "Text")
+                    .map(|v| v.as_ref())
+                    .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
                 ViewMode::Auto => {
                     // Let the registry pick the best viewer using the probe
                     registry
@@ -169,7 +165,9 @@ fn main() -> anyhow::Result<()> {
             println!("File: {}", path.display());
             println!("Mode: {:?}", mode);
             println!("Offset: 0x{:x}", offset);
-            println!("\nUse --stdout (or pipe the output) to get correct non-interactive dumping from the real viewers.");
+            println!(
+                "\nUse --stdout (or pipe the output) to get correct non-interactive dumping from the real viewers."
+            );
         }
     } else {
         // stdin path (future)
@@ -195,7 +193,3 @@ fn parse_offset(s: &str) -> anyhow::Result<u64> {
             .map_err(|e| anyhow::anyhow!("invalid offset: {}", e))
     }
 }
-
-
-
-

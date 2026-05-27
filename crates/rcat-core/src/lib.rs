@@ -13,6 +13,6 @@ pub mod viewer;
 pub mod viewer_registry;
 
 pub use file_info::FileInfo;
-pub use probe::{FileProbe, FileProbeWithInfo, PrefixProbe, DETECTION_READ_LIMIT};
+pub use probe::{DETECTION_READ_LIMIT, FileProbe, FileProbeWithInfo, PrefixProbe};
 pub use viewer::{FileViewer, ViewerPriority};
 pub use viewer_registry::ViewerRegistry;

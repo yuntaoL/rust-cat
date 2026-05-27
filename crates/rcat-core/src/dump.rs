@@ -22,11 +22,7 @@ pub struct DumpOptions {
 ///
 /// This is intentionally conservative: we never assume the whole file is valid UTF-8.
 /// Invalid sequences are replaced with the Unicode replacement character.
-pub fn dump_text<W: Write>(
-    info: &FileInfo,
-    mut writer: W,
-    opts: &DumpOptions,
-) -> io::Result<()> {
+pub fn dump_text<W: Write>(info: &FileInfo, mut writer: W, opts: &DumpOptions) -> io::Result<()> {
     if info.size == 0 {
         return Ok(());
     }
@@ -57,11 +53,7 @@ pub fn dump_text<W: Write>(
 /// Dump the file as classic hex + ASCII (similar to `xxd -g1` / `hexyl` style).
 ///
 /// Always produces 16 bytes per line with proper padding on the last line.
-pub fn dump_hex<W: Write>(
-    info: &FileInfo,
-    mut writer: W,
-    opts: &DumpOptions,
-) -> io::Result<()> {
+pub fn dump_hex<W: Write>(info: &FileInfo, mut writer: W, opts: &DumpOptions) -> io::Result<()> {
     if info.size == 0 {
         return Ok(());
     }

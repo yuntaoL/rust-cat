@@ -14,7 +14,9 @@ pub struct ViewerRegistry {
 impl ViewerRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
-        Self { viewers: Vec::new() }
+        Self {
+            viewers: Vec::new(),
+        }
     }
 
     /// Register a new viewer.

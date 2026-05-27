@@ -38,7 +38,12 @@ impl FileViewer for HexViewer {
         }
     }
 
-    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> std::io::Result<()> {
+    fn dump(
+        &self,
+        info: &FileInfo,
+        writer: &mut dyn Write,
+        opts: &DumpOptions,
+    ) -> std::io::Result<()> {
         // Delegate to the proven correct hex implementation in core.
         dump::dump_hex(info, writer, opts)
     }

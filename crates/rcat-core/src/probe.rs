@@ -6,9 +6,9 @@
 use std::io::{self, Read};
 use std::path::Path;
 
+use crate::FileInfo;
 use crate::detection::PreliminaryDetection;
 use crate::file_info::ContentKind;
-use crate::FileInfo;
 
 /// Maximum number of bytes we are willing to provide to plugins during detection.
 /// This is a deliberate limit to keep detection fast and safe.

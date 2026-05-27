@@ -38,7 +38,12 @@ impl FileViewer for TextViewer {
         }
     }
 
-    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> std::io::Result<()> {
+    fn dump(
+        &self,
+        info: &FileInfo,
+        writer: &mut dyn Write,
+        opts: &DumpOptions,
+    ) -> std::io::Result<()> {
         // Delegate to the proven correct implementation in core.
         // This guarantees consistent, high-quality text output.
         dump::dump_text(info, writer, opts)

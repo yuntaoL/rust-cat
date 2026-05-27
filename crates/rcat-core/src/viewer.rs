@@ -52,7 +52,12 @@ pub trait FileViewer: Send + Sync {
     ///
     /// This is the key method for correctness in non-interactive / piped usage.
     /// Each viewer controls its exact output (text encoding handling, hex formatting, etc.).
-    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> std::io::Result<()>;
+    fn dump(
+        &self,
+        info: &FileInfo,
+        writer: &mut dyn Write,
+        opts: &DumpOptions,
+    ) -> std::io::Result<()>;
 
     // Future (TUI phase):
     // fn render(&self, ctx: &RenderContext) -> Result<()>;
