@@ -9,3 +9,6 @@ description = "CLI argument parsing and orchestration for rcat"
 [dependencies]
 # Will depend on rcat-core once wired
 # clap = { workspace = true }
+
+dirs = "5"
+tracing = { workspace = true }

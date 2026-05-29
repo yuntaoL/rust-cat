@@ -9,6 +9,7 @@ use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::FileProbe;
 use rcat_core::{FileViewer, ViewerPriority};
+use tracing::trace;
 
 /// The built-in viewer for binary / hex data.
 pub struct HexViewer;
@@ -30,12 +31,13 @@ impl FileViewer for HexViewer {
         // Specialized binary viewers (ElfViewer, ImageViewer, ArchiveViewer, etc.)
         // should return `Preferred` when they have a strong match.
         let prelim = probe.preliminary();
-
-        match prelim.kind {
+        let prio = match prelim.kind {
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Text => ViewerPriority::Low,
-        }
+        };
+        trace!(kind = ?prelim.kind, ?prio, "HexViewer::can_handle");
+        prio
     }
 
     fn dump(
@@ -55,6 +57,11 @@ impl FileViewer for HexViewer {
         max_rows: u16,
         _width: u16,
     ) -> Vec<String> {
+        trace!(
+            start = start_offset,
+            rows = max_rows,
+            "HexViewer::render_lines"
+        );
         use std::fs::File;
         use std::io::Read;
 
@@ -109,6 +116,7 @@ impl FileViewer for HexViewer {
     }
 
     fn advance_lines(&self, info: &FileInfo, current: u64, delta: i64, _width: u16) -> u64 {
+        trace!(current, delta, "HexViewer::advance_lines");
         let step: u64 = 16;
         if delta >= 0 {
             let next = current.saturating_add((delta as u64) * step);
@@ -124,7 +132,8 @@ impl FileViewer for HexViewer {
         } else {
             ((pos as f64 / info.size as f64) * 100.0) as u32
         };
-        format!("Hex  0x{:08x} / {}%", pos, pct)
+        trace!(pos, pct, "HexViewer::status");
+        format!("Hex  0x{:08x} / {:>3}%", pos, pct)
     }
 }
 

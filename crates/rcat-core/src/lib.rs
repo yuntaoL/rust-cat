@@ -7,7 +7,9 @@
 
 pub mod detection;
 pub mod dump;
+pub mod external_plugin;
 pub mod file_info;
+pub mod plugin;
 pub mod probe;
 pub mod viewer;
 pub mod viewer_registry;

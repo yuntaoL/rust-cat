@@ -9,6 +9,7 @@ use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::FileProbe;
 use rcat_core::{FileViewer, ViewerPriority};
+use tracing::trace;
 
 /// The built-in viewer for human-readable text files.
 pub struct TextViewer;
@@ -54,12 +55,13 @@ impl FileViewer for TextViewer {
         // Specialized viewers (JsonViewer, MarkdownViewer, etc.) should return
         // `Preferred` when they have a strong match.
         let prelim = probe.preliminary();
-
-        match prelim.kind {
+        let prio = match prelim.kind {
             rcat_core::file_info::ContentKind::Text => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Empty => ViewerPriority::Normal,
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Low,
-        }
+        };
+        trace!(kind = ?prelim.kind, ?prio, "TextViewer::can_handle");
+        prio
     }
 
     fn dump(
@@ -80,6 +82,12 @@ impl FileViewer for TextViewer {
         max_rows: u16,
         width: u16,
     ) -> Vec<String> {
+        trace!(
+            start = start_offset,
+            rows = max_rows,
+            width,
+            "TextViewer::render_lines"
+        );
         use std::fs::File;
 
         if info.size == 0 {
@@ -156,6 +164,7 @@ impl FileViewer for TextViewer {
     }
 
     fn advance_lines(&self, info: &FileInfo, current: u64, delta: i64, width: u16) -> u64 {
+        trace!(current, delta, width, "TextViewer::advance_lines");
         if delta == 0 {
             return current;
         }
@@ -186,7 +195,8 @@ impl FileViewer for TextViewer {
         } else {
             ((pos as f64 / info.size as f64) * 100.0) as u32
         };
-        format!("Text  0x{:08x} / {}%", pos, pct)
+        trace!(pos, pct, "TextViewer::status");
+        format!("Text  0x{:08x} / {:>3}%", pos, pct)
     }
 }
 

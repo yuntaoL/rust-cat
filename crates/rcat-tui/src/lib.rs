@@ -11,11 +11,12 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    text::Line,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use rcat_core::file_info::FileInfo;
 use std::io::{self, stdout};
+use tracing::{debug, trace};
 
 pub struct TuiConfig {
     pub info: FileInfo,
@@ -24,6 +25,7 @@ pub struct TuiConfig {
 }
 
 pub fn run_tui(config: TuiConfig) -> Result<()> {
+    debug!(file = %config.info.path.display(), viewer = config.viewer.name(), "starting TUI");
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -35,6 +37,7 @@ pub fn run_tui(config: TuiConfig) -> Result<()> {
         info: config.info,
         viewer: config.viewer,
         offset: config.initial_offset,
+        show_help: false,
     };
 
     let res = run_app(&mut terminal, &mut app);
@@ -307,6 +310,18 @@ mod tests {
         app.apply(TuiAction::PageDown(100), 80);
         assert_eq!(app.offset(), 103);
     }
+
+    #[test]
+    fn hex_styling_helper_does_not_panic_and_preserves_line_count() {
+        let raw = vec![
+            "00000000: 00 01 02 03 04 05 06 07  08 09 0a 0b 0c 0d 0e 0f |................|"
+                .to_string(),
+            "00000010: 10 11 ff 00                                    |....|".to_string(),
+        ];
+
+        let styled = render_hex_styled_lines(raw.clone());
+        assert_eq!(styled.len(), raw.len());
+    }
 }
 
 /// High-level actions the TUI can perform.
@@ -320,12 +335,14 @@ pub enum TuiAction {
     PageUp(u16),
     GoToStart,
     GoToEnd,
+    ToggleHelp,
 }
 
 struct App {
     info: FileInfo,
     viewer: Box<dyn rcat_core::FileViewer>,
     offset: u64,
+    show_help: bool,
 }
 
 impl App {
@@ -336,6 +353,7 @@ impl App {
             info,
             viewer,
             offset,
+            show_help: false,
         }
     }
 
@@ -347,6 +365,7 @@ impl App {
     /// Applies a high-level action to the app state.
     /// `width` is passed to width-aware viewers for correct scrolling inside wrapped lines.
     pub fn apply(&mut self, action: TuiAction, width: u16) {
+        let old_offset = self.offset;
         match action {
             TuiAction::Quit => {}
             TuiAction::ScrollDown(n) => {
@@ -375,6 +394,12 @@ impl App {
                     .viewer
                     .advance_lines(&self.info, self.info.size, -8, width);
             }
+            TuiAction::ToggleHelp => {
+                self.show_help = !self.show_help;
+            }
+        }
+        if self.offset != old_offset {
+            trace!(old = old_offset, new = self.offset, "offset changed");
         }
     }
 }
@@ -401,6 +426,23 @@ fn run_app<B: ratatui::backend::Backend>(
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
+            trace!(?key.code, "key pressed");
+
+            // When help is open, most keys close the help overlay instead of quitting
+            if app.show_help {
+                match key.code {
+                    KeyCode::Char('?') | KeyCode::Esc => {
+                        app.show_help = false;
+                        continue;
+                    }
+                    KeyCode::Char('q') => return Ok(()), // allow explicit quit even from help
+                    _ => {
+                        app.show_help = false; // any other key closes help
+                        continue;
+                    }
+                }
+            }
+
             let action = match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => TuiAction::Quit,
                 KeyCode::Char('j') | KeyCode::Down => TuiAction::ScrollDown(1),
@@ -409,9 +451,11 @@ fn run_app<B: ratatui::backend::Backend>(
                 KeyCode::PageUp => TuiAction::PageUp(page_size),
                 KeyCode::Char('g') => TuiAction::GoToStart,
                 KeyCode::Char('G') => TuiAction::GoToEnd,
+                KeyCode::Char('?') => TuiAction::ToggleHelp,
                 _ => continue,
             };
 
+            debug!(?action, "applying TUI action");
             if matches!(action, TuiAction::Quit) {
                 return Ok(());
             }
@@ -449,16 +493,19 @@ fn render_app(f: &mut ratatui::Frame, app: &App, content_width: u16) {
         );
     f.render_widget(header, chunks[0]);
 
-    // Content
+    // Content — viewer-aware rendering for better visual quality
     let max_rows = chunks[1].height.saturating_sub(1).max(1);
-    let lines: Vec<Line> = app
+    let raw_lines = app
         .viewer
-        .render_lines(&app.info, app.offset, max_rows, content_width)
-        .into_iter()
-        .map(Line::from)
-        .collect();
+        .render_lines(&app.info, app.offset, max_rows, content_width);
 
-    let content = Paragraph::new(lines)
+    let content_lines: Vec<Line> = if app.viewer.name() == "Hex" {
+        render_hex_styled_lines(raw_lines)
+    } else {
+        raw_lines.into_iter().map(Line::from).collect()
+    };
+
+    let content = Paragraph::new(content_lines)
         .block(
             Block::default()
                 .borders(Borders::LEFT | Borders::RIGHT)
@@ -470,7 +517,7 @@ fn render_app(f: &mut ratatui::Frame, app: &App, content_width: u16) {
     // Footer
     let status = app.viewer.status(&app.info, app.offset);
     let footer_text = format!(
-        " {}   │   q quit   ↑↓/jk scroll   PgUp/PgDn   g/G   │   {}",
+        " {}   │   q quit   ↑↓/jk scroll   PgUp/PgDn   g/G   │   ? help   │   {}",
         status,
         app.viewer.name()
     );
@@ -482,4 +529,109 @@ fn render_app(f: &mut ratatui::Frame, app: &App, content_width: u16) {
                 .border_style(Style::default().fg(Color::DarkGray)),
         );
     f.render_widget(footer, chunks[2]);
+
+    // Simple Help overlay
+    if app.show_help {
+        let help_text = vec![
+            Line::from("rcat — Keyboard Shortcuts"),
+            Line::from(""),
+            Line::from("q / Esc     Quit"),
+            Line::from("j / ↓       Scroll down"),
+            Line::from("k / ↑       Scroll up"),
+            Line::from("PageDown    Page down"),
+            Line::from("PageUp      Page up"),
+            Line::from("g           Go to start"),
+            Line::from("G           Go to end"),
+            Line::from("?           Toggle this help"),
+            Line::from(""),
+            Line::from("Esc / ?     Close help"),
+        ];
+
+        let help = Paragraph::new(help_text)
+            .block(
+                Block::default()
+                    .title("Help")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            )
+            .style(Style::default().fg(Color::White).bg(Color::Black)); // Solid background to hide content underneath
+
+        let help_area = centered_rect(50, 60, f.area());
+
+        // Clear the area first so empty lines in the help box don't show background content
+        f.render_widget(Clear, help_area);
+        f.render_widget(help, help_area);
+    }
+}
+
+/// Helper to create a centered rect (for overlays like Help)
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+/// Render Hex viewer output with nice colors.
+/// This gives the Hex view a much more professional and readable appearance.
+fn render_hex_styled_lines(raw_lines: Vec<String>) -> Vec<Line<'static>> {
+    raw_lines
+        .into_iter()
+        .map(|line| {
+            // Expected format: "00000000: 00 01 02 03 ... |ascii..."
+            if let Some((addr_part, rest)) = line.split_once(": ") {
+                // Use a brighter gray for addresses so they remain readable
+                // (DarkGray + DIM was too faint on many terminals)
+                let addr_style = Style::default().fg(Color::Gray);
+
+                if let Some((hex_part, ascii_part)) = rest.split_once(" |") {
+                    let mut spans = vec![Span::styled(format!("{}: ", addr_part), addr_style)];
+
+                    for byte_str in hex_part.split_whitespace() {
+                        let byte = u8::from_str_radix(byte_str, 16).unwrap_or(0);
+                        let color = if byte == 0 {
+                            Color::DarkGray
+                        } else if (0x20..=0x7e).contains(&byte) {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        };
+                        spans.push(Span::styled(
+                            format!("{} ", byte_str),
+                            Style::default().fg(color),
+                        ));
+                    }
+
+                    spans.push(Span::styled("|", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled(
+                        ascii_part.to_string(),
+                        Style::default().fg(Color::Cyan),
+                    ));
+
+                    Line::from(spans)
+                } else {
+                    Line::from(line)
+                }
+            } else {
+                Line::from(line)
+            }
+        })
+        .collect()
 }

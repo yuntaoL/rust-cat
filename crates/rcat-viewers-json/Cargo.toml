@@ -4,11 +4,23 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "JSON pretty-printing viewer for rcat (demonstrates specialized plugin priority)"
+description = "JSON pretty-printing viewer for rcat (external plugin)"
+
+[[bin]]
+name = "rcat-viewer-json"
+path = "src/main.rs"
 
 [dependencies]
 rcat-core = { path = "../rcat-core" }
+serde = { workspace = true }
 serde_json = "1.0"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+# This crate is now a pure plugin binary.
+# We do not publish a library anymore.
+# This is a binary-only crate.
+# It is an external plugin (rcat-viewer-json) and is not linked as a library by the main rcat binary.

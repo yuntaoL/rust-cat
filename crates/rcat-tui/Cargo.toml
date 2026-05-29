@@ -12,3 +12,4 @@ crossterm = { workspace = true }
 anyhow = { workspace = true }
 rcat-core = { path = "../rcat-core" }
 memmap2 = { workspace = true }
+tracing = { workspace = true }

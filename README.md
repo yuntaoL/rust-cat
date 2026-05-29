@@ -66,6 +66,20 @@ rcat file | head -n 50
 
 Press `?` inside the TUI for the full keybinding cheat sheet.
 
+### Debugging / Logging
+
+When you use `--log-file` (or `RCAT_LOG_FILE`), rcat + plugins switch to **file-only** logging. Nothing is written to stderr. This keeps the TUI perfectly clean.
+
+```bash
+RCAT_LOG=debug rcat --log-file /tmp/rcat.log some.json
+# Terminal 2:
+tail -f /tmp/rcat.log     # contains both host and plugin logs
+```
+
+Without a log file, logging goes to stderr only (classic behavior).
+
+See [docs/development.md](docs/development.md) for full details.
+
 ---
 
 ## Keyboard Navigation (Core Bindings)

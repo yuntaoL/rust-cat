@@ -6,8 +6,8 @@
 
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
-**Date**: 2026-05-26 (last major update)  
-**Status**: Implementation in progress — Phase 0 complete (first commit done). Moving into Phase 1.
+**Date**: 2026-06 (last major update)  
+**Status**: Implementation well advanced. Phases 0–3 largely complete (workspace, core, TUI, multiple viewers, strong navigation). Logging wired to all components (Phase 5 foundation). Active focus on **Phase 4 UX polish** + finishing robust external plugin protocol (pull model, timeouts, error handling, render_lines path). Excellent testability and ~76% line coverage already achieved.
 
 ## Quick Navigation
 
@@ -22,14 +22,14 @@
 
 ## Phases at a Glance (see Section 8 for full details)
 
-| Phase | Focus                              | Est. Effort |
-|-------|------------------------------------|-------------|
-| 0     | Setup, workspace, first working `rcat --version` binary, GitHub scaffolding | 1–2 days |
-| 1     | Core foundations (`FileInfo`, detection, `Viewer` trait) | 3–5 days |
-| 2     | TUI shell + event loop + first viewer | 4–6 days |
-| 3     | Second viewer + unified navigation + polish | 4–6 days |
-| 4     | UX, colors, metadata sidebar, help, error handling | 3–4 days |
-| 5     | Extensibility hooks, config, release packaging | 3–5 days |
+| Phase | Focus                                                      | Status                  | Notes |
+|-------|------------------------------------------------------------|-------------------------|-------|
+| 0     | Setup, workspace, first working `rcat --version` binary, GitHub scaffolding | **Complete**           | Done early |
+| 1     | Core foundations (`FileInfo`, detection, `Viewer` trait, registry) | **Largely Complete**   | Strong test coverage |
+| 2     | TUI shell + event loop + first viewer                      | **Complete**           | Ratatui + crossterm |
+| 3     | Second viewer + unified navigation + polish                | **Complete**           | Text + Hex + JSON viewers; good paging/scrolling |
+| 4     | **UX Polish + Viewer Quality** (current focus)             | **In Progress**        | Theming, Help (`?`), metadata, visual quality of viewers |
+| 5     | Extensibility hooks (plugins + logging), config, release   | **Foundation complete**| Logging done across workspace; plugin protocol (discovery, ExternalPluginViewer, JSON integration test) in progress |
 
 **Total for v0.1**: ~3–5 weeks focused work.
 
@@ -185,14 +185,24 @@ Recommendation for v0.1: Start with a thin custom widget (inspired by hexyl + he
 - New viewers added as workspace crates behind feature flags or just additional `mod` entries
 - Simple registry (static `inventory` crate or explicit `register_viewer!` macro)
 
-**Phase 2 (v0.2+)**: External command plugins (recommended first runtime extension mechanism)
-- Discover executables named `rcat-*` in `PATH` or `~/.config/rcat/plugins/`
-- Simple JSON protocol over stdin/stdout:
-  - `can_handle(file_path, magic, size)` → priority + display name
-  - `render_text(file, offset, height, width)` → lines + cursor info
-  - `metadata(file)` → key/value tree
-- Extremely safe (process isolation), any language, easy to debug, matches the `git-*` / `cargo-*` pattern that Rust users already understand.
-- This is the pragmatic winner for most CLI tools in 2025–2026.
+**Phase 2 (v0.2+)**: External command plugins (current focus)
+- Discovery locations:
+  - Same directory as the `rcat` executable (excellent for development)
+  - `~/.config/rcat/plugins/`
+- Plugins are separate executables following the naming convention `rcat-viewer-*` or `rcat-plugin-*`.
+- Mandatory `--plugin-info` command that returns JSON metadata (name, version, capabilities, handles hints, default priority).
+- Two-phase detection:
+  1. Cheap pre-filter using `--plugin-info` metadata + core `infer` result.
+  2. Only promising plugins are spawned and asked `can_handle`.
+- Pull-based data access (max 16 KiB total during detection, max 16 KiB per request).
+- JSON protocol over stdin/stdout (one-shot processes).
+- Priority model:
+  - Built-in Text/Hex → `Low`
+  - General external plugins → `Normal`
+  - Specific file type plugins → `Preferred`
+- Host (main process) is the only one that reads file data (important for pipes, permissions, and security).
+- Initial supported capabilities: `can_handle`, `dump`, `render_lines` (plain text).
+- Rich rendering (Markdown, images, etc.) is explicitly deferred to a later iteration.
 
 **Phase 3 (later, power users)**: Sandboxed WASM plugins
 - Use **Extism** (best DX) or **Wasmtime + WebAssembly Component Model + WIT** (most future-proof, capability-based security via WASI).
@@ -386,18 +396,26 @@ Examples:
 - Basic keyboard handling + resize handling
 - One working viewer (start with Hex — often easier to get right visually)
 
-**Phase 3 — Second Viewer + Navigation Polish (4–6 days)**
-- Text viewer with line index
-- Unified byte-offset navigation across modes
-- Toggle, scrolling, Home/End/Page keys all working smoothly
-- Status bar showing position, percentage, file info
+**Phase 3 — Second Viewer + Navigation Polish (4–6 days)** *(Completed)*
+- Text viewer with line index + width-aware rendering
+- Unified byte-offset navigation across modes (including visual-row scrolling for wrapped text/JSON)
+- Toggle, scrolling, Home/End/Page keys working well
+- Good test coverage of navigation actions
 
-**Phase 4 — UX & Metadata (3–4 days)**
-- Color scheme (inspired by hexyl + modern Ratatui themes)
-- Metadata sidebar (toggleable)
-- Help overlay (`?`)
-- Graceful error screens (bad file, permission, etc.)
+**Phase 4 — UX Polish + Viewer Quality (Current Focus)**
+- Color scheme and theming (especially Hex viewer coloring)
+- Help overlay triggered by `?`
+- Improved status bar + optional metadata sidebar (toggle with `m`)
+- Visual quality improvements for Text, Hex, and JSON viewers
+- Better error handling and graceful degradation
 - Panic recovery + clean terminal restore
+
+**Phase 5 — Extensibility Hooks + Release**
+- Document the `Viewer` trait as the primary extension point
+- Skeleton for external command plugin discovery
+- Basic config file support (colors, defaults)
+- Packaging and release process
+- High-quality README with screenshots and keybindings
 
 **Phase 5 — Extensibility Hooks + Release (3–5 days)**
 - Document the `Viewer` trait as the extension point
@@ -629,6 +647,62 @@ We can now discuss, refine, and continue execution with confidence.
 
 ---
 
+### 2026-06 — Major Progress Update (Post-Phase 3)
+
+**Major achievements since the original plan was written:**
+
+- Full workspace with 8 crates (including `rcat-viewers-json`).
+- Three working viewers: Text (with width-aware + visual-row scrolling), Hex, and JSON (pretty-printed with priority selection).
+- Mature Ratatui TUI with clean architecture (`TuiAction` + pure `App::apply` + extracted `render_app` for excellent testability).
+- High-quality navigation: character/line scrolling, proper PageUp/PageDown with viewport-based sizing + 2-line overlap, GoToStart/GoToEnd.
+- Strong testability and quality:
+  - 11+ focused TUI navigation tests using `TestBackend` + controllable `TestViewer`.
+  - Significant expansion of unit tests in `rcat-core` (probe, registry, detection, dump).
+  - Overall line coverage reached ~76%.
+- Added `cargo-llvm-cov` integration via `just` (`coverage` and `coverage-check` with 50% threshold, enforced in CI).
+- CI improvements and removal of deprecated actions.
+
+**Current Focus (as of this update):**
+Actively working on **Phase 4 — UX Polish + Viewer Quality** + **Phase 5 foundation** (external plugins + logging) in tight iteration loops:
+
+**Iteration 1 (completed in this session):**
+- Added proper color coding to the Hex viewer (address dim, nulls gray, printable green, non-printable red, ASCII cyan).
+- Added unit test for the Hex styling helper.
+- All changes passed `just lint` and relevant tests.
+
+**Iteration 2 (completed in this session):**
+- Added `ToggleHelp` action and `?` key support.
+- Implemented a basic but usable centered Help overlay.
+- Updated footer to mention `? help`.
+- All changes passed `just lint` + TUI tests (now 12 tests).
+
+**Iteration 3 (completed in this session):**
+- Added full tracing + tracing-subscriber support to **all components** (rcat binary, rcat-core, rcat-cli, rcat-tui, text/hex viewers, json plugin).
+- Consistent stderr-only initialization with `RCAT_LOG` (preferred) / `RUST_LOG` fallback + `-v` level control in the host.
+- Useful debug/trace statements across discovery, ExternalPluginViewer protocol (CanHandle + dump), registry priority decisions, TUI event loop + offset changes, viewer render/advance/status entry points.
+- Updated json plugin help text and init for consistency.
+- Documentation: development.md + README troubleshooting section.
+- All changes followed the process rule (tests + `just lint` clean + docs).
+- This makes the (still evolving) plugin protocol observable without ever corrupting stdout/JSON.
+- Added `--log-file` / `RCAT_LOG_FILE` support. When used, logs are written to the file (in addition to stderr) and a clear message is printed before the TUI takes over the screen. This solves the "I can't see logs while the TUI is running" problem — users can now `tail -f` from another terminal.
+- Plugin logs are now merged into the same file: the host sets `RCAT_LOG_FILE` in the environment of spawned viewer plugins, and the JSON plugin (and future ones) respect it and write to the shared file.
+
+1. **TUI UX Polish**
+   - Theming and color scheme (global + viewer-specific)
+   - Help overlay (`?`)
+   - Metadata sidebar (toggleable with `m`)
+   - Status bar improvements
+
+2. **Viewer Quality**
+   - Proper, attractive coloring for the Hex viewer
+   - Visual improvements for Text and JSON viewers
+
+**Work Process**: Every change follows the loop — implement → add tests → run `just lint` → update relevant documentation → repeat until the feature area is complete and polished.
+
+See the new dedicated work section below for detailed task breakdown.
+
+---
+
 ## Note on This Document
 
 This file (`docs/plan.md`) **inside the repository** is the official plan that travels with the codebase.
@@ -638,3 +712,29 @@ This file (`docs/plan.md`) **inside the repository** is the official plan that t
 - Contributors and future maintainers should treat `docs/plan.md` as the source of truth for "what does each phase actually contain?"
 
 If you are looking for the concrete work breakdown per phase, jump directly to **[Section 8: Implementation Phases & Milestones](#8-implementation-phases--milestones)**.
+
+---
+
+## Current Work: Phase 4 — UX Polish + Viewer Quality (2026-06)
+
+**Active Priorities (in order):**
+
+### 1. TUI UX Polish
+- [ ] Global + viewer-aware color theming (using Ratatui `Style` + `Color`)
+- [ ] Help overlay (`?` key) with keybindings and viewer-specific info
+- [ ] Toggleable metadata sidebar (`m` key)
+- [ ] Improved status bar (position, percentage, file type, etc.)
+- [ ] Consistent visual language across Text / Hex / JSON
+
+### 2. Viewer Quality
+- [ ] **Hex Viewer**: Proper color coding (address, hex bytes by category, ASCII printable vs non-printable), better spacing and alignment
+- [ ] **Text Viewer**: Subtle coloring or styling for better readability
+- [ ] **JSON Viewer**: Nicer presentation of pretty-printed output
+
+**Process Rule**: No task is considered complete until:
+- Functionality works well in the TUI
+- Relevant unit/integration tests are added (and pass)
+- `just lint` passes cleanly (fmt + clippy -D warnings)
+- Documentation is updated where relevant (`docs/development.md`, README, plan.md, code comments)
+
+See the Progress Log for the latest iteration status.

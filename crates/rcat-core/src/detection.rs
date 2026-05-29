@@ -11,7 +11,7 @@ use crate::file_info::ContentKind;
 
 /// Rich result from the core's first-pass detection.
 /// Viewers can rely on this and only do additional work when they need to.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PreliminaryDetection {
     /// MIME type guessed by the core (e.g. "image/jpeg", "application/json").
     pub mime_type: Option<String>,

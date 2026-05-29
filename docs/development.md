@@ -74,9 +74,23 @@ Run with `just run-release tests/fixtures/large-*.bin` and verify startup < ~150
 
 ## Debugging the TUI
 
-- `RUST_LOG=debug cargo run ...` (once tracing is wired)
-- Use `better-panic` or `color-backtrace` on panic in debug builds.
-- Resize the terminal frequently while developing.
+**Important TUI safety rule**: When you use `--log-file` (or `RCAT_LOG_FILE`), rcat and all plugins switch to **file-only logging**. Nothing is written to stderr at all. This guarantees the TUI (which takes over the terminal with raw mode + alternate screen) can never be corrupted by log output.
+
+- Logs from the **host + external plugins** (rcat-viewer-*) are merged into the same file.
+- Recommended workflow:
+  ```bash
+  # Terminal 1
+  RCAT_LOG=debug rcat --log-file /tmp/rcat.log some.json
+
+  # Terminal 2 — watch everything (host + JSON plugin etc.) live
+  tail -f /tmp/rcat.log
+  ```
+- Without a log file: normal stderr-only logging (classic behavior).
+- `RCAT_LOG=debug cargo run -- README.md`
+- `-v` / `-vv` still works to increase verbosity when no `RCAT_LOG` is set.
+- Plugins respect the same rules.
+
+Use `better-panic` or `color-backtrace` on panic in debug builds. Resize the terminal frequently while developing.
 
 ## Adding Dependencies
 

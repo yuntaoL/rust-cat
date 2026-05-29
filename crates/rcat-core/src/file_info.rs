@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 /// High-level classification of the file content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ContentKind {
     /// Likely human-readable text (UTF-8 or common encodings).
     #[default]

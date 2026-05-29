@@ -5,6 +5,7 @@
 
 use crate::probe::FileProbe;
 use crate::viewer::FileViewer;
+use tracing::debug;
 
 /// A registry that holds multiple `FileViewer` implementations.
 pub struct ViewerRegistry {
@@ -28,11 +29,25 @@ impl ViewerRegistry {
     ///
     /// Returns `None` only if the registry is empty.
     pub fn find_best(&self, probe: &mut dyn FileProbe) -> Option<&dyn FileViewer> {
-        self.viewers
+        let candidates: Vec<_> = self
+            .viewers
             .iter()
-            .map(|viewer| (viewer.as_ref(), viewer.can_handle(probe)))
+            .map(|viewer| {
+                let p = viewer.can_handle(probe);
+                debug!(viewer = viewer.name(), priority = ?p, "can_handle evaluated");
+                (viewer.as_ref(), p)
+            })
+            .collect();
+
+        let best = candidates
+            .into_iter()
             .max_by_key(|(_, priority)| *priority)
-            .map(|(viewer, _)| viewer)
+            .map(|(viewer, _)| viewer);
+
+        if let Some(v) = best {
+            debug!(selected = v.name(), "find_best chose viewer");
+        }
+        best
     }
 
     /// Returns all registered viewers.

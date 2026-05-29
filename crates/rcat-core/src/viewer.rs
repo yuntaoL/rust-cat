@@ -20,7 +20,9 @@ use crate::probe::FileProbe;
 ///
 /// This convention prevents priority collisions when multiple viewers could
 /// theoretically handle the same file (e.g. a JSON file is both "Text" and "JSON").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum ViewerPriority {
     /// This viewer cannot handle the file at all.
     None,

@@ -18,8 +18,10 @@ anyhow = { workspace = true }
 rcat-core = { path = "../rcat-core" }
 rcat-viewers-text = { path = "../rcat-viewers-text" }
 rcat-viewers-hex = { path = "../rcat-viewers-hex" }
-rcat-viewers-json = { path = "../rcat-viewers-json" }
 rcat-tui = { path = "../rcat-tui" }
+rcat-cli = { path = "../rcat-cli" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"
