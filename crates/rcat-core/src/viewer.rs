@@ -164,6 +164,7 @@ mod tests {
             type_description: "text".into(),
             extension: None,
             detected: crate::detection::PreliminaryDetection::default(),
+            backing: None,
         };
 
         let lines = viewer.render_lines(&info, 0, 10, 80);

@@ -189,6 +189,16 @@ mod tests {
     }
 
     #[test]
+    fn hex_dump_snapshot() {
+        let data = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10";
+        let (_dir, path) = make_temp_file(data);
+        let info = FileInfo::from_path(&path).unwrap();
+        let mut out = Vec::new();
+        dump_hex(&info, &mut out, &DumpOptions::default()).unwrap();
+        insta::assert_snapshot!(String::from_utf8(out).unwrap());
+    }
+
+    #[test]
     fn dump_text_adds_trailing_newline_when_needed() {
         let data = b"no newline at end";
         let (_dir, path) = make_temp_file(data);

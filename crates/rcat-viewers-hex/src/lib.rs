@@ -3,7 +3,7 @@
 //! Produces classic, correct hex + ASCII output (16 bytes per line with proper padding).
 //! This is the default for binary files and is designed for high visual and data correctness.
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
 
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
@@ -62,38 +62,28 @@ impl FileViewer for HexViewer {
             rows = max_rows,
             "HexViewer::render_lines"
         );
-        use std::fs::File;
-        use std::io::Read;
 
         if info.size == 0 {
             return vec!["(empty file)".to_string()];
         }
 
-        let mut file = match File::open(&info.path) {
-            Ok(f) => f,
+        let backing = match rcat_core::backing::backing_for_info(info) {
+            Ok(b) => b,
             Err(_) => return vec!["(error opening file)".to_string()],
         };
 
         let start = start_offset.min(info.size);
-        if file.seek(SeekFrom::Start(start)).is_err() {
-            return vec!["(seek error)".to_string()];
-        }
-
-        let bytes_to_read = (max_rows as u64 * 16).min(info.size - start) as usize;
-        let mut buffer = vec![0u8; bytes_to_read];
-        let read = file.read(&mut buffer).unwrap_or(0);
-        buffer.truncate(read);
+        let bytes_to_read = (max_rows as u64 * 16).min(info.size.saturating_sub(start)) as usize;
+        let buffer = backing.slice(start, bytes_to_read);
 
         let mut lines = Vec::new();
         for (i, chunk) in buffer.chunks(16).enumerate() {
             let addr = start + (i as u64 * 16);
-
             let hex_part: String = chunk
                 .iter()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect::<Vec<_>>()
                 .join(" ");
-
             let ascii_part: String = chunk
                 .iter()
                 .map(|&b| {
@@ -104,8 +94,7 @@ impl FileViewer for HexViewer {
                     }
                 })
                 .collect();
-
-            lines.push(format!("{:08x}: {:<48} |{}", addr, hex_part, ascii_part));
+            lines.push(format!("{addr:08x}: {hex_part:<48} |{ascii_part}"));
         }
 
         if lines.is_empty() {

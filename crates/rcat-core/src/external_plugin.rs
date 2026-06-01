@@ -1,21 +1,20 @@
 //! Adapter that turns an external command-line plugin into a `FileViewer`.
 
-#![allow(dead_code)] // Plugin system is under active development
-
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::dump::DumpOptions;
 use crate::file_info::FileInfo;
-use crate::plugin::{PluginInfo, PluginRequest, PluginResponse};
+use crate::plugin::{
+    DEFAULT_PLUGIN_TIMEOUT_SECS, PluginCapability, PluginInfo, PluginRequest, PluginResponse,
+};
 use crate::probe::FileProbe;
 use crate::viewer::{FileViewer, ViewerPriority};
 use tracing::{debug, trace, warn};
 
 /// Forward logging-related environment variables to child plugin processes.
-/// This allows the plugin to write to the same --log-file (if any) that the
-/// host is using, so all logs end up merged in one place.
 fn configure_logging_for_child(cmd: &mut Command) {
     for var in ["RCAT_LOG_FILE", "RCAT_LOG", "RUST_LOG"] {
         if let Ok(val) = std::env::var(var) {
@@ -24,24 +23,104 @@ fn configure_logging_for_child(cmd: &mut Command) {
     }
 }
 
+/// Spawn the plugin, send one JSON request on stdin, read one JSON response from stdout.
+pub fn run_plugin_request(
+    executable: &Path,
+    request: &PluginRequest,
+    timeout: Duration,
+) -> std::io::Result<PluginResponse> {
+    debug!(path = %executable.display(), ?request, "spawning plugin for request");
+
+    let mut cmd = Command::new(executable);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    configure_logging_for_child(&mut cmd);
+
+    let mut child = cmd.spawn().map_err(|e| {
+        warn!(path = %executable.display(), error = %e, "failed to spawn plugin");
+        e
+    })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let request_json = serde_json::to_string(request).map_err(std::io::Error::other)?;
+        trace!(request = %request_json, "writing JSON to plugin stdin");
+        writeln!(stdin, "{request_json}")?;
+        let _ = stdin.flush();
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    std::io::Read::read_to_end(&mut out, &mut stdout)?;
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    std::io::Read::read_to_end(&mut err, &mut stderr)?;
+                }
+                if !status.success() {
+                    warn!(
+                        stderr = %String::from_utf8_lossy(&stderr),
+                        "plugin exited non-zero"
+                    );
+                    return Err(std::io::Error::other(format!(
+                        "Plugin {:?} failed: {}",
+                        executable,
+                        String::from_utf8_lossy(&stderr)
+                    )));
+                }
+                let response: PluginResponse = serde_json::from_slice(&stdout).map_err(|e| {
+                    std::io::Error::other(format!(
+                        "Invalid plugin JSON response: {e}; stdout={}",
+                        String::from_utf8_lossy(&stdout)
+                    ))
+                })?;
+                return Ok(response);
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                warn!(path = %executable.display(), ?timeout, "plugin request timed out");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Plugin {:?} timed out after {:?}", executable, timeout),
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+fn path_str(info: &FileInfo) -> String {
+    info.path.display().to_string()
+}
+
 /// An external viewer plugin discovered at runtime.
 pub struct ExternalPluginViewer {
-    /// Path to the plugin executable.
     executable: PathBuf,
-    /// Cached plugin metadata (fetched once).
     info: PluginInfo,
+    timeout: Duration,
 }
 
 impl ExternalPluginViewer {
     /// Create a new external plugin from a discovered executable.
-    /// This will immediately query `--plugin-info`.
     pub fn new(executable: PathBuf) -> std::io::Result<Self> {
-        let info = Self::query_plugin_info(&executable)?;
-
-        Ok(Self { executable, info })
+        Self::with_timeout(executable, Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECS))
     }
 
-    fn query_plugin_info(executable: &PathBuf) -> std::io::Result<PluginInfo> {
+    pub fn with_timeout(executable: PathBuf, timeout: Duration) -> std::io::Result<Self> {
+        let info = Self::query_plugin_info(&executable)?;
+        Ok(Self {
+            executable,
+            info,
+            timeout,
+        })
+    }
+
+    fn query_plugin_info(executable: &Path) -> std::io::Result<PluginInfo> {
         debug!(path = %executable.display(), "querying --plugin-info from external plugin");
 
         let mut cmd = Command::new(executable);
@@ -71,31 +150,25 @@ impl ExternalPluginViewer {
     pub fn info(&self) -> &PluginInfo {
         &self.info
     }
+
+    pub fn has_capability(&self, cap: PluginCapability) -> bool {
+        self.info.capabilities.contains(&cap)
+    }
+
+    fn invoke(&self, request: PluginRequest) -> std::io::Result<PluginResponse> {
+        run_plugin_request(&self.executable, &request, self.timeout)
+    }
 }
 
 impl FileViewer for ExternalPluginViewer {
     fn name(&self) -> &'static str {
-        // We leak the string to satisfy the 'static lifetime required by the trait.
-        // This is acceptable because plugin names are small and live for the whole process.
         Box::leak(self.info.name.clone().into_boxed_str())
     }
 
     fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
-        // Basic implementation of the plugin protocol for can_handle.
-        // We send initial data (up to 16KB) and ask the plugin for its priority.
-
         let file_size = probe.file_size();
         let preliminary = probe.preliminary().clone();
-
-        // Read up to 16KB for detection
         let initial_data: Vec<u8> = probe.read_bytes(0, 16 * 1024).unwrap_or_default().to_vec();
-
-        debug!(
-            plugin = self.info.name,
-            file_size,
-            initial_len = initial_data.len(),
-            "sending CanHandle request to plugin"
-        );
 
         let request = PluginRequest::CanHandle {
             file_size,
@@ -103,98 +176,138 @@ impl FileViewer for ExternalPluginViewer {
             initial_data,
         };
 
-        // Spawn the plugin and send the request
-        let mut cmd = Command::new(&self.executable);
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        configure_logging_for_child(&mut cmd);
-
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
+        match self.invoke(request) {
+            Ok(PluginResponse::CanHandleResult { priority }) => {
+                debug!(plugin = self.info.name, ?priority, "plugin CanHandle");
+                priority
+            }
+            Ok(PluginResponse::Error { message }) => {
+                warn!(plugin = self.info.name, %message, "plugin CanHandle error");
+                ViewerPriority::None
+            }
+            Ok(_) => {
+                warn!(plugin = self.info.name, "unexpected CanHandle response");
+                ViewerPriority::None
+            }
             Err(e) => {
-                warn!(plugin = self.info.name, error = %e, "failed to spawn plugin for can_handle");
-                return ViewerPriority::None;
+                warn!(plugin = self.info.name, error = %e, "CanHandle request failed");
+                ViewerPriority::None
             }
-        };
-
-        {
-            let stdin = child.stdin.as_mut().expect("failed to open stdin");
-            let request_json = serde_json::to_string(&request).unwrap();
-            trace!(request = %request_json, "writing CanHandle JSON to plugin stdin");
-            if writeln!(stdin, "{}", request_json).is_err() {
-                return ViewerPriority::None;
-            }
-            let _ = stdin.flush();
         }
-
-        let output = match child.wait_with_output() {
-            Ok(o) => o,
-            Err(e) => {
-                warn!(plugin = self.info.name, error = %e, "plugin wait failed");
-                return ViewerPriority::None;
-            }
-        };
-
-        if !output.status.success() {
-            warn!(
-                plugin = self.info.name,
-                "plugin exited non-zero for CanHandle"
-            );
-            return ViewerPriority::None;
-        }
-
-        // The plugin should have printed a single JSON line with CanHandleResult
-        if let Ok(PluginResponse::CanHandleResult { priority }) =
-            serde_json::from_slice::<PluginResponse>(&output.stdout)
-        {
-            debug!(
-                plugin = self.info.name,
-                ?priority,
-                "plugin responded to CanHandle"
-            );
-            return priority;
-        }
-
-        // Fallback
-        warn!(
-            plugin = self.info.name,
-            "plugin returned unexpected response for CanHandle, falling back to Low"
-        );
-        ViewerPriority::Low
     }
 
     fn dump(
         &self,
         info: &FileInfo,
         writer: &mut dyn Write,
-        _opts: &DumpOptions,
+        opts: &DumpOptions,
     ) -> std::io::Result<()> {
-        // For external plugins in the first version, we use a simple CLI interface:
-        //   rcat-viewer-xxx dump <file>
-        //
-        // This is easy for plugin authors and works well for non-interactive use.
-        debug!(plugin = self.info.name, path = %info.path.display(), "invoking plugin dump (CLI mode)");
+        if self.has_capability(PluginCapability::Dump) {
+            let request = PluginRequest::Dump {
+                file_path: path_str(info),
+                offset: opts.offset,
+                length: opts.length,
+            };
+            match self.invoke(request) {
+                Ok(PluginResponse::DumpResult { output }) => {
+                    writer.write_all(output.as_bytes())?;
+                    return Ok(());
+                }
+                Ok(PluginResponse::Error { message }) => {
+                    return Err(std::io::Error::other(message));
+                }
+                Ok(_) | Err(_) => {
+                    debug!(
+                        plugin = self.info.name,
+                        "protocol Dump failed, trying CLI dump"
+                    );
+                }
+            }
+        }
 
+        debug!(plugin = self.info.name, "invoking plugin dump (CLI mode)");
         let mut cmd = Command::new(&self.executable);
         cmd.arg("dump");
         cmd.arg(&info.path);
         configure_logging_for_child(&mut cmd);
 
-        // TODO: Pass offset/length when the plugin protocol supports it.
-
         let output = cmd.output()?;
-
         if !output.status.success() {
-            warn!(plugin = self.info.name, stderr = %String::from_utf8_lossy(&output.stderr), "plugin dump failed");
             return Err(std::io::Error::other(format!(
                 "Plugin {} failed: {}",
                 self.name(),
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
-
         writer.write_all(&output.stdout)?;
         Ok(())
+    }
+
+    fn render_lines(
+        &self,
+        info: &FileInfo,
+        start_offset: u64,
+        max_rows: u16,
+        width: u16,
+    ) -> Vec<String> {
+        if !self.has_capability(PluginCapability::RenderLines) {
+            return vec![format!(
+                "[{} viewer] render_lines not implemented (missing RenderLines capability)",
+                self.name()
+            )];
+        }
+
+        let request = PluginRequest::RenderLines {
+            file_path: path_str(info),
+            start_offset,
+            max_rows,
+            width,
+        };
+
+        match self.invoke(request) {
+            Ok(PluginResponse::RenderLinesResult { lines }) => lines,
+            Ok(PluginResponse::Error { message }) => {
+                vec![format!("(plugin error: {message})")]
+            }
+            Ok(_) => vec![format!(
+                "({} viewer: unexpected render_lines response)",
+                self.name()
+            )],
+            Err(e) => vec![format!("(plugin error: {e})")],
+        }
+    }
+
+    fn advance_lines(&self, info: &FileInfo, current: u64, delta: i64, width: u16) -> u64 {
+        if !self.has_capability(PluginCapability::RenderLines) {
+            return FileViewer::advance_lines(self, info, current, delta, width);
+        }
+
+        let request = PluginRequest::AdvanceLines {
+            file_path: path_str(info),
+            current,
+            delta,
+            width,
+        };
+
+        match self.invoke(request) {
+            Ok(PluginResponse::AdvanceLinesResult { position }) => position,
+            _ => (current as i64 + delta).max(0) as u64,
+        }
+    }
+
+    fn status(&self, info: &FileInfo, pos: u64) -> String {
+        if !self.has_capability(PluginCapability::RenderLines) {
+            return format!("{} @ {}", self.name(), pos);
+        }
+
+        let request = PluginRequest::Status {
+            file_path: path_str(info),
+            position: pos,
+        };
+
+        match self.invoke(request) {
+            Ok(PluginResponse::StatusResult { status }) => status,
+            _ => format!("{} @ {}", self.name(), pos),
+        }
     }
 }

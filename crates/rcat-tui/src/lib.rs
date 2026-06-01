@@ -1,52 +1,63 @@
 //! rcat-tui — interactive terminal UI for rcat using Ratatui + crossterm.
 
+mod metadata;
+mod styling;
+mod terminal;
+mod theme;
+
 use anyhow::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use metadata::{build_metadata_lines, position_percent};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
+    layout::{Constraint, Direction, Layout, Rect},
+    text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use rcat_core::file_info::FileInfo;
 use std::io::{self, stdout};
+use styling::render_content_lines;
+use terminal::TerminalGuard;
+use theme::Theme;
 use tracing::{debug, trace};
+
+/// Width of the metadata sidebar when visible.
+const SIDEBAR_WIDTH: u16 = 28;
 
 pub struct TuiConfig {
     pub info: FileInfo,
-    pub viewer: Box<dyn rcat_core::FileViewer>,
+    /// All registered viewers (built-in + plugins), in registration order.
+    pub viewers: Vec<Box<dyn rcat_core::FileViewer>>,
+    /// Index into `viewers` for the initially active viewer.
+    pub initial_viewer_index: usize,
     pub initial_offset: u64,
 }
 
 pub fn run_tui(config: TuiConfig) -> Result<()> {
-    debug!(file = %config.info.path.display(), viewer = config.viewer.name(), "starting TUI");
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
+    let initial_name = config
+        .viewers
+        .get(config.initial_viewer_index)
+        .map(|v| v.name())
+        .unwrap_or("?");
+    debug!(
+        file = %config.info.path.display(),
+        viewer = initial_name,
+        viewer_count = config.viewers.len(),
+        "starting TUI"
+    );
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App {
-        info: config.info,
-        viewer: config.viewer,
-        offset: config.initial_offset,
-        show_help: false,
-    };
+    let mut app = App::new(
+        config.info,
+        config.viewers,
+        config.initial_viewer_index,
+        config.initial_offset,
+    );
 
-    let res = run_app(&mut terminal, &mut app);
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
+    if let Err(err) = run_app(&mut terminal, &mut app) {
         println!("{err:?}");
     }
 
@@ -64,18 +75,25 @@ mod tests {
     /// A controllable viewer used only in tests.
     /// It returns a predictable grid of lines based on the requested offset and width.
     struct TestViewer {
+        name: &'static str,
         total_lines: usize,
+    }
+
+    impl TestViewer {
+        fn new(name: &'static str, total_lines: usize) -> Self {
+            Self { name, total_lines }
+        }
     }
 
     impl Default for TestViewer {
         fn default() -> Self {
-            Self { total_lines: 100 }
+            Self::new("Test", 100)
         }
     }
 
     impl rcat_core::FileViewer for TestViewer {
         fn name(&self) -> &'static str {
-            "Test"
+            self.name
         }
 
         fn can_handle(&self, _probe: &mut dyn rcat_core::FileProbe) -> rcat_core::ViewerPriority {
@@ -132,22 +150,21 @@ mod tests {
             type_description: "text".to_string(),
             extension: Some("txt".to_string()),
             detected: rcat_core::detection::PreliminaryDetection::default(),
+            backing: None,
         }
     }
 
     #[test]
     fn app_new_and_offset() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer::default());
-        let app = App::new(info, viewer, 42);
+        let app = App::new(info, vec![Box::new(TestViewer::default())], 0, 42);
         assert_eq!(app.offset(), 42);
     }
 
     #[test]
     fn apply_scroll_changes_offset() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer::default());
-        let mut app = App::new(info, viewer, 5);
+        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 5);
 
         app.apply(TuiAction::ScrollDown(3), 80);
         assert_eq!(app.offset(), 8);
@@ -157,10 +174,32 @@ mod tests {
     }
 
     #[test]
+    fn toggle_viewer_cycles_and_preserves_offset() {
+        let info = make_test_file_info();
+        let mut app = App::new(
+            info,
+            vec![
+                Box::new(TestViewer::new("A", 10)),
+                Box::new(TestViewer::new("B", 10)),
+            ],
+            0,
+            7,
+        );
+        assert_eq!(app.active_viewer_name(), "A");
+        assert_eq!(app.offset(), 7);
+
+        app.apply(TuiAction::ToggleViewer, 80);
+        assert_eq!(app.active_viewer_name(), "B");
+        assert_eq!(app.offset(), 7);
+
+        app.apply(TuiAction::ToggleViewer, 80);
+        assert_eq!(app.active_viewer_name(), "A");
+    }
+
+    #[test]
     fn render_app_produces_expected_lines() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 10 });
-        let app = App::new(info, viewer, 2);
+        let app = App::new(info, vec![Box::new(TestViewer::new("Test", 10))], 0, 2);
 
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -187,8 +226,7 @@ mod tests {
     #[test]
     fn go_to_end_and_start() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 50 });
-        let mut app = App::new(info, viewer, 10);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 50))], 0, 10);
 
         app.apply(TuiAction::GoToEnd, 80);
         assert_eq!(app.offset(), 49);
@@ -200,8 +238,7 @@ mod tests {
     #[test]
     fn render_respects_content_width() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 5 });
-        let app = App::new(info, viewer, 0);
+        let app = App::new(info, vec![Box::new(TestViewer::new("Test", 5))], 0, 0);
 
         let backend = TestBackend::new(20, 6);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -221,8 +258,7 @@ mod tests {
     #[test]
     fn multiple_actions_sequence() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 100 });
-        let mut app = App::new(info, viewer, 50);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 100))], 0, 50);
 
         app.apply(TuiAction::ScrollDown(10), 80);
         app.apply(TuiAction::PageUp(20), 80);
@@ -239,8 +275,7 @@ mod tests {
     #[test]
     fn scroll_down_and_up_work() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 100 });
-        let mut app = App::new(info, viewer, 10);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 100))], 0, 10);
 
         app.apply(TuiAction::ScrollDown(5), 80);
         assert_eq!(app.offset(), 15);
@@ -252,8 +287,7 @@ mod tests {
     #[test]
     fn page_down_and_page_up_use_the_provided_size() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 200 });
-        let mut app = App::new(info, viewer, 10);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 200))], 0, 10);
 
         // Page size of 30
         app.apply(TuiAction::PageDown(30), 80);
@@ -266,8 +300,7 @@ mod tests {
     #[test]
     fn go_to_start_and_go_to_end() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 80 });
-        let mut app = App::new(info, viewer, 35);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 80))], 0, 35);
 
         app.apply(TuiAction::GoToStart, 80);
         assert_eq!(app.offset(), 0);
@@ -279,8 +312,7 @@ mod tests {
     #[test]
     fn navigation_clamps_at_boundaries() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 30 });
-        let mut app = App::new(info, viewer, 5);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 30))], 0, 5);
 
         // Can't go below 0
         app.apply(TuiAction::ScrollUp(20), 80);
@@ -303,8 +335,7 @@ mod tests {
     #[test]
     fn large_page_down_from_near_start() {
         let info = make_test_file_info();
-        let viewer = Box::new(TestViewer { total_lines: 1000 });
-        let mut app = App::new(info, viewer, 3);
+        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 1000))], 0, 3);
 
         // Big page jump
         app.apply(TuiAction::PageDown(100), 80);
@@ -312,15 +343,46 @@ mod tests {
     }
 
     #[test]
-    fn hex_styling_helper_does_not_panic_and_preserves_line_count() {
-        let raw = vec![
-            "00000000: 00 01 02 03 04 05 06 07  08 09 0a 0b 0c 0d 0e 0f |................|"
-                .to_string(),
-            "00000010: 10 11 ff 00                                    |....|".to_string(),
-        ];
+    fn toggle_metadata_flips_sidebar_flag() {
+        let info = make_test_file_info();
+        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 0);
+        assert!(!app.show_metadata());
+        app.apply(TuiAction::ToggleMetadata, 80);
+        assert!(app.show_metadata());
+        app.apply(TuiAction::ToggleMetadata, 80);
+        assert!(!app.show_metadata());
+    }
 
-        let styled = render_hex_styled_lines(raw.clone());
-        assert_eq!(styled.len(), raw.len());
+    #[test]
+    fn render_with_metadata_sidebar_shows_mime() {
+        let info = FileInfo {
+            path: PathBuf::from("/tmp/test.json"),
+            absolute_path: None,
+            size: 100,
+            kind: rcat_core::file_info::ContentKind::Text,
+            type_description: "JSON".to_string(),
+            extension: Some("json".to_string()),
+            detected: rcat_core::detection::PreliminaryDetection {
+                mime_type: Some("application/json".to_string()),
+                ..Default::default()
+            },
+            backing: None,
+        };
+        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 0);
+        app.apply(TuiAction::ToggleMetadata, 80);
+
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render_app(f, &app, 60)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(content.contains("MIME"));
+        assert!(content.contains("application/json"));
     }
 }
 
@@ -336,28 +398,61 @@ pub enum TuiAction {
     GoToStart,
     GoToEnd,
     ToggleHelp,
+    /// Cycle to the next registered viewer (Text → Hex → plugins, wrap).
+    ToggleViewer,
+    /// Toggle the metadata sidebar.
+    ToggleMetadata,
 }
 
 struct App {
     info: FileInfo,
-    viewer: Box<dyn rcat_core::FileViewer>,
+    viewers: Vec<Box<dyn rcat_core::FileViewer>>,
+    viewer_index: usize,
     offset: u64,
     show_help: bool,
+    show_metadata: bool,
+    theme: Theme,
 }
 
 impl App {
     /// Creates a new App. Useful for tests and the real TUI.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn new(info: FileInfo, viewer: Box<dyn rcat_core::FileViewer>, offset: u64) -> Self {
+    pub fn new(
+        info: FileInfo,
+        viewers: Vec<Box<dyn rcat_core::FileViewer>>,
+        viewer_index: usize,
+        offset: u64,
+    ) -> Self {
+        let viewer_index = if viewers.is_empty() {
+            0
+        } else {
+            viewer_index.min(viewers.len() - 1)
+        };
         Self {
             info,
-            viewer,
+            viewers,
+            viewer_index,
             offset,
             show_help: false,
+            show_metadata: false,
+            theme: Theme::default(),
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
+    fn show_metadata(&self) -> bool {
+        self.show_metadata
+    }
+
+    fn active_viewer(&self) -> &dyn rcat_core::FileViewer {
+        self.viewers[self.viewer_index].as_ref()
+    }
+
+    #[cfg(test)]
+    fn active_viewer_name(&self) -> &str {
+        self.active_viewer().name()
+    }
+
+    #[cfg(test)]
     pub fn offset(&self) -> u64 {
         self.offset
     }
@@ -366,40 +461,61 @@ impl App {
     /// `width` is passed to width-aware viewers for correct scrolling inside wrapped lines.
     pub fn apply(&mut self, action: TuiAction, width: u16) {
         let old_offset = self.offset;
+        let old_viewer = self.active_viewer().name().to_string();
         match action {
             TuiAction::Quit => {}
             TuiAction::ScrollDown(n) => {
-                self.offset = self
-                    .viewer
-                    .advance_lines(&self.info, self.offset, n as i64, width);
+                self.offset =
+                    self.active_viewer()
+                        .advance_lines(&self.info, self.offset, n as i64, width);
             }
             TuiAction::ScrollUp(n) => {
                 self.offset =
-                    self.viewer
+                    self.active_viewer()
                         .advance_lines(&self.info, self.offset, -(n as i64), width);
             }
             TuiAction::PageDown(n) => {
-                self.offset = self
-                    .viewer
-                    .advance_lines(&self.info, self.offset, n as i64, width);
+                self.offset =
+                    self.active_viewer()
+                        .advance_lines(&self.info, self.offset, n as i64, width);
             }
             TuiAction::PageUp(n) => {
                 self.offset =
-                    self.viewer
+                    self.active_viewer()
                         .advance_lines(&self.info, self.offset, -(n as i64), width);
             }
             TuiAction::GoToStart => self.offset = 0,
             TuiAction::GoToEnd => {
-                self.offset = self
-                    .viewer
-                    .advance_lines(&self.info, self.info.size, -8, width);
+                self.offset =
+                    self.active_viewer()
+                        .advance_lines(&self.info, self.info.size, -8, width);
             }
             TuiAction::ToggleHelp => {
                 self.show_help = !self.show_help;
             }
+            TuiAction::ToggleViewer => {
+                if self.viewers.len() > 1 {
+                    self.viewer_index = (self.viewer_index + 1) % self.viewers.len();
+                    debug!(
+                        viewer = self.active_viewer().name(),
+                        offset = self.offset,
+                        "switched viewer (offset preserved)"
+                    );
+                }
+            }
+            TuiAction::ToggleMetadata => {
+                self.show_metadata = !self.show_metadata;
+            }
         }
         if self.offset != old_offset {
             trace!(old = old_offset, new = self.offset, "offset changed");
+        }
+        if self.active_viewer().name() != old_viewer.as_str() {
+            trace!(
+                old = %old_viewer,
+                new = self.active_viewer().name(),
+                "viewer changed"
+            );
         }
     }
 }
@@ -449,9 +565,25 @@ fn run_app<B: ratatui::backend::Backend>(
                 KeyCode::Char('k') | KeyCode::Up => TuiAction::ScrollUp(1),
                 KeyCode::PageDown => TuiAction::PageDown(page_size),
                 KeyCode::PageUp => TuiAction::PageUp(page_size),
-                KeyCode::Char('g') => TuiAction::GoToStart,
-                KeyCode::Char('G') => TuiAction::GoToEnd,
+                KeyCode::Char('d')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    TuiAction::PageDown(page_size)
+                }
+                KeyCode::Char('u')
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                {
+                    TuiAction::PageUp(page_size)
+                }
+                KeyCode::Char('g') | KeyCode::Home => TuiAction::GoToStart,
+                KeyCode::Char('G') | KeyCode::End => TuiAction::GoToEnd,
                 KeyCode::Char('?') => TuiAction::ToggleHelp,
+                KeyCode::Tab | KeyCode::Char('h') => TuiAction::ToggleViewer,
+                KeyCode::Char('m') => TuiAction::ToggleMetadata,
                 _ => continue,
             };
 
@@ -467,101 +599,146 @@ fn run_app<B: ratatui::backend::Backend>(
 
 /// Extracted pure rendering logic. This is the key enabler for testing the UI
 /// with `ratatui::backend::TestBackend` without any real terminal or crossterm.
-fn render_app(f: &mut ratatui::Frame, app: &App, content_width: u16) {
-    let chunks = Layout::default()
+fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
+    let theme = app.theme;
+    let viewer = app.active_viewer();
+
+    let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Header
-            Constraint::Min(0),    // Main content
-            Constraint::Length(2), // Footer
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(2),
         ])
         .split(f.area());
 
-    // Header
-    let header_text = format!(
-        " {}  ·  {} bytes  ·  {}",
-        app.info.path.display(),
-        app.info.size,
-        app.viewer.name()
-    );
-    let header = Paragraph::new(header_text)
-        .style(Style::default().fg(Color::Cyan).bold())
-        .block(
-            Block::default()
-                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(header, chunks[0]);
-
-    // Content — viewer-aware rendering for better visual quality
-    let max_rows = chunks[1].height.saturating_sub(1).max(1);
-    let raw_lines = app
-        .viewer
-        .render_lines(&app.info, app.offset, max_rows, content_width);
-
-    let content_lines: Vec<Line> = if app.viewer.name() == "Hex" {
-        render_hex_styled_lines(raw_lines)
+    let viewer_label = if app.viewers.len() > 1 {
+        format!(
+            "{} ({}/{})",
+            viewer.name(),
+            app.viewer_index + 1,
+            app.viewers.len()
+        )
     } else {
-        raw_lines.into_iter().map(Line::from).collect()
+        viewer.name().to_string()
     };
+    let pct = position_percent(app.offset, app.info.size);
+    let header_text = format!(
+        " {}  ·  {}  ·  {}  ·  offset 0x{:X} ({pct}%)",
+        app.info.path.display(),
+        metadata::format_file_size(app.info.size),
+        viewer_label,
+        app.offset
+    );
+    let header = Paragraph::new(header_text).style(theme.header).block(
+        Block::default()
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .border_style(theme.border),
+    );
+    f.render_widget(header, vertical[0]);
+
+    let main_area = vertical[1];
+    let (content_area, content_width) = if app.show_metadata {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(20), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(main_area);
+        render_metadata_sidebar(f, split[1], &app.info, theme);
+        let width = split[0].width.saturating_sub(4).max(8).min(usable_width);
+        (split[0], width)
+    } else {
+        let width = main_area.width.saturating_sub(4).max(8).min(usable_width);
+        (main_area, width)
+    };
+
+    let max_rows = content_area.height.saturating_sub(1).max(1);
+    let raw_lines = viewer.render_lines(&app.info, app.offset, max_rows, content_width);
+    let content_lines = render_content_lines(viewer.name(), raw_lines, &theme);
 
     let content = Paragraph::new(content_lines)
         .block(
             Block::default()
                 .borders(Borders::LEFT | Borders::RIGHT)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(theme.border),
         )
         .wrap(Wrap { trim: false });
-    f.render_widget(content, chunks[1]);
+    f.render_widget(content, content_area);
 
-    // Footer
-    let status = app.viewer.status(&app.info, app.offset);
+    let viewer_status = viewer.status(&app.info, app.offset);
+    let pct = position_percent(app.offset, app.info.size);
+    let mut hints = vec!["q quit", "m meta", "? help"];
+    if app.viewers.len() > 1 {
+        hints.insert(1, "Tab/h viewer");
+    }
     let footer_text = format!(
-        " {}   │   q quit   ↑↓/jk scroll   PgUp/PgDn   g/G   │   ? help   │   {}",
-        status,
-        app.viewer.name()
+        " {viewer_status}  ·  0x{:X} ({pct}%)  │  {}",
+        app.offset,
+        hints.join("  ")
     );
-    let footer = Paragraph::new(footer_text)
-        .style(Style::default().fg(Color::Gray))
+    let footer = Paragraph::new(footer_text).style(theme.footer).block(
+        Block::default()
+            .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+            .border_style(theme.border),
+    );
+    f.render_widget(footer, vertical[2]);
+
+    if app.show_help {
+        render_help_overlay(f, app, theme);
+    }
+}
+
+fn render_metadata_sidebar(f: &mut ratatui::Frame, area: Rect, info: &FileInfo, theme: Theme) {
+    let lines = build_metadata_lines(info, &theme);
+    let sidebar = Paragraph::new(lines)
         .block(
             Block::default()
-                .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(footer, chunks[2]);
+                .title(" Info ")
+                .borders(Borders::ALL)
+                .border_style(theme.border),
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(sidebar, area);
+}
 
-    // Simple Help overlay
-    if app.show_help {
-        let help_text = vec![
-            Line::from("rcat — Keyboard Shortcuts"),
-            Line::from(""),
-            Line::from("q / Esc     Quit"),
-            Line::from("j / ↓       Scroll down"),
-            Line::from("k / ↑       Scroll up"),
-            Line::from("PageDown    Page down"),
-            Line::from("PageUp      Page up"),
-            Line::from("g           Go to start"),
-            Line::from("G           Go to end"),
-            Line::from("?           Toggle this help"),
-            Line::from(""),
-            Line::from("Esc / ?     Close help"),
-        ];
-
-        let help = Paragraph::new(help_text)
-            .block(
-                Block::default()
-                    .title("Help")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
-            .style(Style::default().fg(Color::White).bg(Color::Black)); // Solid background to hide content underneath
-
-        let help_area = centered_rect(50, 60, f.area());
-
-        // Clear the area first so empty lines in the help box don't show background content
-        f.render_widget(Clear, help_area);
-        f.render_widget(help, help_area);
+fn render_help_overlay(f: &mut ratatui::Frame, app: &App, theme: Theme) {
+    let mut help_text = vec![
+        Line::from("rcat — Keyboard Shortcuts"),
+        Line::from(""),
+        Line::from("q / Esc     Quit"),
+        Line::from("j / ↓       Scroll down"),
+        Line::from("k / ↑       Scroll up"),
+        Line::from("Ctrl-d      Page down"),
+        Line::from("Ctrl-u      Page up"),
+        Line::from("PgUp/PgDn   Page up / down"),
+        Line::from("g / Home    Go to start"),
+        Line::from("G / End     Go to end"),
+        Line::from("m           Toggle metadata sidebar"),
+    ];
+    if app.viewers.len() > 1 {
+        let names: Vec<_> = app.viewers.iter().map(|v| v.name()).collect();
+        help_text.push(Line::from(format!(
+            "Tab / h     Cycle viewer ({})",
+            names.join(" → ")
+        )));
     }
+    help_text.extend([
+        Line::from("?           Toggle this help"),
+        Line::from(""),
+        Line::from("Esc / ?     Close help"),
+    ]);
+
+    let help = Paragraph::new(help_text)
+        .block(
+            Block::default()
+                .title("Help")
+                .borders(Borders::ALL)
+                .border_style(theme.help_border),
+        )
+        .style(theme.help_body);
+
+    let help_area = centered_rect(50, 60, f.area());
+    f.render_widget(Clear, help_area);
+    f.render_widget(help, help_area);
 }
 
 /// Helper to create a centered rect (for overlays like Help)
@@ -587,51 +764,4 @@ fn centered_rect(
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
-}
-
-/// Render Hex viewer output with nice colors.
-/// This gives the Hex view a much more professional and readable appearance.
-fn render_hex_styled_lines(raw_lines: Vec<String>) -> Vec<Line<'static>> {
-    raw_lines
-        .into_iter()
-        .map(|line| {
-            // Expected format: "00000000: 00 01 02 03 ... |ascii..."
-            if let Some((addr_part, rest)) = line.split_once(": ") {
-                // Use a brighter gray for addresses so they remain readable
-                // (DarkGray + DIM was too faint on many terminals)
-                let addr_style = Style::default().fg(Color::Gray);
-
-                if let Some((hex_part, ascii_part)) = rest.split_once(" |") {
-                    let mut spans = vec![Span::styled(format!("{}: ", addr_part), addr_style)];
-
-                    for byte_str in hex_part.split_whitespace() {
-                        let byte = u8::from_str_radix(byte_str, 16).unwrap_or(0);
-                        let color = if byte == 0 {
-                            Color::DarkGray
-                        } else if (0x20..=0x7e).contains(&byte) {
-                            Color::Green
-                        } else {
-                            Color::Red
-                        };
-                        spans.push(Span::styled(
-                            format!("{} ", byte_str),
-                            Style::default().fg(color),
-                        ));
-                    }
-
-                    spans.push(Span::styled("|", Style::default().fg(Color::DarkGray)));
-                    spans.push(Span::styled(
-                        ascii_part.to_string(),
-                        Style::default().fg(Color::Cyan),
-                    ));
-
-                    Line::from(spans)
-                } else {
-                    Line::from(line)
-                }
-            } else {
-                Line::from(line)
-            }
-        })
-        .collect()
 }

@@ -2,16 +2,18 @@
 //!
 //! A modern, extensible terminal file viewer for text and binary files.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::generate;
+use rcat_core::backing::FileBacking;
 use rcat_core::file_info::FileInfo;
+use rcat_core::plugin::PluginCapability;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
-use rcat_core::{FileViewer, ViewerRegistry, dump};
+use rcat_core::{ViewerRegistry, dump};
 use rcat_viewers_hex::HexViewer;
-// JsonViewer is now provided as an external plugin (rcat-viewer-json)
 use rcat_viewers_text::TextViewer;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// rcat - A modern, extensible terminal file viewer (text, hex, and beyond)
@@ -24,7 +26,8 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
                   By default it opens an interactive TUI when stdout is a tty.\n\
                   Use --stdout (or pipe) for non-interactive output.",
     after_help = "Press '?' inside the TUI for keybindings.\n\n\
-                  Examples:\n  rcat README.md\n  rcat --hex /bin/ls\n  rcat --offset 0x1000 --length 256 firmware.bin"
+                  Examples:\n  rcat README.md\n  rcat --hex /bin/ls\n  rcat --offset 0x1000 --length 256 firmware.bin\n  \
+                  echo '{\"a\":1}' | rcat"
 )]
 struct Cli {
     /// File to view (omit to read from stdin)
@@ -64,7 +67,6 @@ struct Cli {
     verbose: u8,
 
     /// Write logs to this file (in addition to stderr).
-    /// Especially useful in interactive TUI mode — `tail -f` the file from another terminal to watch live logs.
     #[arg(long, value_name = "PATH", env = "RCAT_LOG_FILE")]
     log_file: Option<PathBuf>,
 
@@ -82,7 +84,7 @@ enum Commands {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
-#[allow(clippy::enum_variant_names)] // Shell::Bash, Shell::Zsh etc. are the canonical names we want
+#[allow(clippy::enum_variant_names)]
 enum Shell {
     Bash,
     Zsh,
@@ -93,30 +95,21 @@ enum Shell {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let app_config = rcat_cli::config::RcatConfig::load(cli.config.as_deref());
 
     init_logging(cli.verbose, cli.log_file.clone());
 
     if cli.list_viewers {
-        println!("Built-in viewers (v0.1):");
-        println!("  text   - UTF-8 text pager with graceful fallback");
-        println!("  hex    - Classic 16-byte hex + ASCII view (color-coded)");
-        println!("  json   - Pretty-printed JSON (specialized plugin example)");
-        println!("\nMore viewers will be available via plugins in future releases.");
+        list_viewers();
         return Ok(());
     }
 
     if let Some(Commands::Completions { shell }) = cli.command {
-        // Placeholder — real implementation uses clap_complete
-        eprintln!(
-            "Completions for {:?} not yet implemented in this build",
-            shell
-        );
+        print_completions(shell);
         return Ok(());
     }
 
-    // Parse offset (support 0x and decimal)
     let offset = parse_offset(&cli.offset)?;
-
     let mode = if cli.hex {
         ViewMode::Hex
     } else if cli.text {
@@ -124,114 +117,170 @@ fn main() -> anyhow::Result<()> {
     } else {
         ViewMode::Auto
     };
+    let use_stdout = cli.stdout || !std::io::stdout().is_terminal();
 
-    let is_stdout_tty = std::io::stdout().is_terminal();
-    let use_stdout = cli.stdout || !is_stdout_tty;
-
-    if let Some(path) = &cli.file {
-        let info = FileInfo::from_path(path)?;
-
-        // Build registry once
-        let mut registry = ViewerRegistry::new();
-        registry.register(Box::new(TextViewer));
-        registry.register(Box::new(HexViewer));
-        // JSON viewer is provided via the external plugin system (rcat-viewer-json)
-
-        // Discover external plugins (plug-and-play, no config needed)
-        let search_paths = rcat_cli::plugin_discovery::plugin_search_paths();
-        let discovered = rcat_cli::plugin_discovery::discover_plugins(&search_paths);
-
-        tracing::info!(count = discovered.len(), "external plugins discovered");
-
-        for plugin_path in discovered {
-            match rcat_core::external_plugin::ExternalPluginViewer::new(plugin_path.clone()) {
-                Ok(plugin) => {
-                    let info = plugin.info();
-                    // Only register plugins that declare they can do at least can_handle + dump
-                    if info
-                        .capabilities
-                        .contains(&rcat_core::plugin::PluginCapability::CanHandle)
-                    {
-                        tracing::debug!(name = %info.name, version = %info.version, path = %plugin_path.display(), "registering external plugin");
-                        registry.register(Box::new(plugin));
-                    } else {
-                        tracing::trace!(name = %info.name, "plugin lacks CanHandle capability, skipping");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(path = %plugin_path.display(), error = %e, "failed to load plugin");
-                    eprintln!("Warning: Failed to load plugin {:?}: {}", plugin_path, e);
-                }
-            }
+    let (_stdin_guard, path) = match &cli.file {
+        Some(p) => (None, p.clone()),
+        None => {
+            let (tmp, p) = rcat_cli::stdin::spool_stdin_to_temp()?;
+            (Some(tmp), p)
         }
+    };
 
-        // Build probe for viewer selection (used in Auto mode)
-        let prefix_probe = PrefixProbe::from_path(path)?;
-        let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
+    run_on_path(&path, mode, offset, cli.length, use_stdout, &app_config)
+}
 
-        let selected_viewer: &dyn FileViewer = match mode {
-            ViewMode::Hex => registry
-                .all_viewers()
-                .iter()
-                .find(|v| v.name() == "Hex")
-                .map(|v| v.as_ref())
-                .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
-            ViewMode::Text => registry
-                .all_viewers()
-                .iter()
-                .find(|v| v.name() == "Text")
-                .map(|v| v.as_ref())
-                .unwrap_or_else(|| registry.all_viewers().first().unwrap().as_ref()),
-            ViewMode::Auto => {
-                let best = registry
-                    .find_best(&mut probe)
-                    .expect("at least one viewer should be registered");
-                tracing::info!(viewer = best.name(), "auto-selected viewer");
-                best
-            }
-        };
+fn run_on_path(
+    path: &Path,
+    mode: ViewMode,
+    offset: u64,
+    length: Option<u64>,
+    use_stdout: bool,
+    app_config: &rcat_cli::config::RcatConfig,
+) -> anyhow::Result<()> {
+    let backing = FileBacking::open(path)?;
+    let info = FileInfo::from_path(path)?.with_backing(backing);
 
-        tracing::debug!(
-            viewer = selected_viewer.name(),
-            use_stdout,
-            "final viewer selected"
-        );
+    let registry = build_registry(app_config)?;
 
-        if use_stdout {
-            let opts = dump::DumpOptions {
-                offset,
-                length: cli.length,
-            };
+    let prefix_probe = PrefixProbe::from_path(path)?;
+    let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
 
-            let stdout = std::io::stdout();
-            let mut lock = stdout.lock();
-            selected_viewer.dump(&info, &mut lock, &opts)?;
-        } else {
-            // Launch the interactive TUI with the chosen viewer
-            // We move the viewer into the TUI
-            let viewer: Box<dyn rcat_core::FileViewer> = match selected_viewer.name() {
-                "Hex" => Box::new(HexViewer),
-                _ => Box::new(TextViewer),
-            };
-
-            let config = rcat_tui::TuiConfig {
-                info,
-                viewer,
-                initial_offset: offset,
-            };
-
-            // Note: we no longer emit any extra eprintln here.
-            // When a log file is active we log *only* to the file (no stderr at all)
-            // to guarantee the TUI is never corrupted by log output.
-            rcat_tui::run_tui(config)?;
+    let initial_viewer_index = match mode {
+        ViewMode::Hex => registry.index_of("Hex").unwrap_or(0),
+        ViewMode::Text => registry.index_of("Text").unwrap_or(0),
+        ViewMode::Auto => {
+            let best = registry
+                .find_best(&mut probe)
+                .expect("at least one viewer should be registered");
+            tracing::info!(viewer = best.name(), "auto-selected viewer");
+            registry.index_of(best.name()).unwrap_or(0)
         }
+    };
+
+    let selected_viewer = registry
+        .all_viewers()
+        .get(initial_viewer_index)
+        .expect("initial_viewer_index is valid")
+        .as_ref();
+
+    tracing::debug!(
+        viewer = selected_viewer.name(),
+        use_stdout,
+        "final viewer selected"
+    );
+
+    if use_stdout {
+        let opts = dump::DumpOptions { offset, length };
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        selected_viewer.dump(&info, &mut lock, &opts)?;
     } else {
-        // stdin path (future)
-        eprintln!("Reading from stdin is not fully supported yet. Please provide a file path.");
-        std::process::exit(1);
+        let viewers = registry.into_viewers();
+        if viewers.is_empty() {
+            anyhow::bail!("no viewers registered");
+        }
+
+        rcat_tui::run_tui(rcat_tui::TuiConfig {
+            info,
+            viewers,
+            initial_viewer_index,
+            initial_offset: offset,
+        })?;
     }
 
     Ok(())
+}
+
+fn build_registry(app_config: &rcat_cli::config::RcatConfig) -> anyhow::Result<ViewerRegistry> {
+    let mut registry = ViewerRegistry::new();
+    registry.register(Box::new(TextViewer));
+    registry.register(Box::new(HexViewer));
+
+    let search_paths = rcat_cli::plugin_discovery::plugin_search_paths();
+    let discovered = rcat_cli::plugin_discovery::discover_plugins(&search_paths);
+    tracing::info!(count = discovered.len(), "external plugins discovered");
+
+    let timeout = app_config.plugin_timeout();
+
+    for plugin_path in discovered {
+        match rcat_core::external_plugin::ExternalPluginViewer::with_timeout(
+            plugin_path.clone(),
+            timeout,
+        ) {
+            Ok(plugin) => {
+                let meta = plugin.info();
+                let usable = meta.capabilities.contains(&PluginCapability::CanHandle)
+                    && (meta.capabilities.contains(&PluginCapability::Dump)
+                        || meta.capabilities.contains(&PluginCapability::RenderLines));
+                if usable {
+                    tracing::debug!(
+                        name = %meta.name,
+                        version = %meta.version,
+                        path = %plugin_path.display(),
+                        "registering external plugin"
+                    );
+                    registry.register(Box::new(plugin));
+                } else {
+                    tracing::trace!(name = %meta.name, "plugin missing required capabilities");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %plugin_path.display(), error = %e, "failed to load plugin");
+                eprintln!("Warning: Failed to load plugin {:?}: {e}", plugin_path);
+            }
+        }
+    }
+
+    Ok(registry)
+}
+
+fn list_viewers() {
+    println!("Built-in viewers:");
+    println!("  Text   — UTF-8 text pager");
+    println!("  Hex    — 16-byte hex + ASCII");
+    println!();
+    println!("External plugins are discovered next to the rcat binary and in:");
+    println!("  ~/.config/rcat/plugins/");
+    println!();
+    println!("Run `rcat <file>` to see which viewers are active for that file.");
+}
+
+fn print_completions(shell: Shell) {
+    let mut cmd = Cli::command();
+    let name = "rcat";
+    match shell {
+        Shell::Bash => generate(
+            clap_complete::shells::Bash,
+            &mut cmd,
+            name,
+            &mut std::io::stdout(),
+        ),
+        Shell::Zsh => generate(
+            clap_complete::shells::Zsh,
+            &mut cmd,
+            name,
+            &mut std::io::stdout(),
+        ),
+        Shell::Fish => generate(
+            clap_complete::shells::Fish,
+            &mut cmd,
+            name,
+            &mut std::io::stdout(),
+        ),
+        Shell::PowerShell => generate(
+            clap_complete::shells::PowerShell,
+            &mut cmd,
+            name,
+            &mut std::io::stdout(),
+        ),
+        Shell::Elvish => generate(
+            clap_complete::shells::Elvish,
+            &mut cmd,
+            name,
+            &mut std::io::stdout(),
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,14 +290,6 @@ enum ViewMode {
     Hex,
 }
 
-/// Initialize tracing subscriber.
-///
-/// - Always logs to stderr (never stdout, to protect JSON plugin protocol and TUI).
-/// - If `log_file` is Some, also appends structured logs to that file (no ANSI colors).
-/// - Prefers RCAT_LOG / RCAT_LOG_FILE over RUST_LOG.
-/// - Falls back to level derived from -v/--verbose when no env vars are set.
-///
-/// This makes live debugging possible even when the TUI has taken over the screen.
 fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
     let filter = if let Ok(v) = std::env::var("RCAT_LOG") {
         EnvFilter::new(v)
@@ -266,24 +307,15 @@ fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
         ))
     };
 
-    // Policy: If the user asked for a log file (via --log-file or RCAT_LOG_FILE),
-    // we log *only* to that file. Never to stderr. This is critical for TUI safety
-    // because the TUI takes over the terminal (raw mode + alternate screen).
-    // If no log file was requested, we log only to stderr (classic behavior).
     if let Some(path) = &log_file {
-        // Best effort: create parent directories
         if let Some(parent) = path.parent()
             && let Err(e) = std::fs::create_dir_all(parent)
         {
-            eprintln!(
-                "Warning: failed to create log directory {:?}: {}",
-                parent, e
-            );
+            eprintln!("Warning: failed to create log directory {:?}: {e}", parent);
         }
 
         match OpenOptions::new().create(true).append(true).open(path) {
             Ok(file) => {
-                // Make the log file visible to child processes (plugins) via env var.
                 // SAFETY: early in main, single-threaded, intentional for child inheritance.
                 unsafe {
                     std::env::set_var("RCAT_LOG_FILE", path);
@@ -301,8 +333,7 @@ fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
                     .init();
             }
             Err(e) => {
-                eprintln!("Warning: failed to open log file {:?}: {}", path, e);
-                // Fallback to stderr-only so we don't lose all logs
+                eprintln!("Warning: failed to open log file {:?}: {e}", path);
                 let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_ansi(true);
                 tracing_subscriber::registry()
                     .with(filter)
@@ -311,7 +342,6 @@ fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
             }
         }
     } else {
-        // Classic mode: only stderr, no file
         let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_ansi(true);
         tracing_subscriber::registry()
             .with(filter)
@@ -324,9 +354,9 @@ fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
 
 fn parse_offset(s: &str) -> anyhow::Result<u64> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).map_err(|e| anyhow::anyhow!("invalid hex offset: {}", e))
+        u64::from_str_radix(hex, 16).map_err(|e| anyhow::anyhow!("invalid hex offset: {e}"))
     } else {
         s.parse::<u64>()
-            .map_err(|e| anyhow::anyhow!("invalid offset: {}", e))
+            .map_err(|e| anyhow::anyhow!("invalid offset: {e}"))
     }
 }

@@ -90,7 +90,7 @@ Run with `just run-release tests/fixtures/large-*.bin` and verify startup < ~150
 - `-v` / `-vv` still works to increase verbosity when no `RCAT_LOG` is set.
 - Plugins respect the same rules.
 
-Use `better-panic` or `color-backtrace` on panic in debug builds. Resize the terminal frequently while developing.
+The TUI installs a panic hook that restores raw mode and leaves the alternate screen before printing the panic message. Resize the terminal frequently while developing.
 
 ## Adding Dependencies
 

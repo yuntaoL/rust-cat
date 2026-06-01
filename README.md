@@ -78,7 +78,7 @@ tail -f /tmp/rcat.log     # contains both host and plugin logs
 
 Without a log file, logging goes to stderr only (classic behavior).
 
-See [docs/development.md](docs/development.md) for full details.
+See [docs/development.md](docs/development.md) and [docs/plugins.md](docs/plugins.md) for full details.
 
 ---
 
@@ -88,7 +88,7 @@ See [docs/development.md](docs/development.md) for full details.
 |----------------------|---------------------------------|
 | `q` / `Ctrl-C`       | Quit                            |
 | `?`                  | Help overlay                    |
-| `Tab` / `h`          | Toggle Text ↔ Hex               |
+| `Tab` / `h`          | Cycle viewers (Text → Hex → plugins) |
 | `j` / `↓`            | Down one line / row             |
 | `k` / `↑`            | Up                              |
 | `Ctrl-d` / `PageDown`| Page down                       |
@@ -97,17 +97,17 @@ See [docs/development.md](docs/development.md) for full details.
 | `G` / `End`          | Go to end of file               |
 | `m`                  | Toggle metadata sidebar         |
 
-Hex mode has additional column navigation (`h`/`l`) and goto (`Ctrl-j`).
+Hex column navigation and goto (`Ctrl-j`) are planned for a later release.
 
 ---
 
 ## Project Status
 
-**Phase 0 complete** (2026-05-26): Professional Git + GitHub scaffolding + full workspace layout + working `rcat --version` / `--help` / non-interactive dump binary.
+**Phases 0–3 largely complete** (2026-06): Workspace, core (`FileInfo`, detection, `Viewer` trait), interactive TUI with Text + Hex viewers, plugin discovery, and non-interactive dump mode. **Phase 4** (UX polish) and **Phase 5** (extensibility + release) are in progress.
 
-We are now entering **Phase 1** (core foundations: `FileInfo`, detection, real `Viewer` trait).
+Recent work: external plugins support **RenderLines** in the TUI (JSON viewer), **stdin** is spooled to a temp file, files are **memory-mapped** for viewers, and `~/.config/rcat/config.toml` sets plugin timeouts. Shell completions: `rcat completions bash`.
 
-**The full project plan** (including the detailed list of work items for every implementation phase) lives in **[docs/plan.md](docs/plan.md)**. This is the canonical document.
+**The full project plan** lives in **[docs/plan.md](docs/plan.md)**. That is the canonical document.
 
 It contains:
 - Program definition & scope

@@ -79,6 +79,35 @@ pub enum PluginRequest {
 
     /// Plugin is asking for more file data.
     ReadBytes { offset: u64, length: usize },
+
+    /// Render a viewport for the interactive TUI.
+    ///
+    /// `start_offset` meaning is viewer-specific (byte offset for hex-oriented
+    /// plugins, line index for line-oriented plugins such as JSON).
+    RenderLines {
+        file_path: String,
+        start_offset: u64,
+        max_rows: u16,
+        width: u16,
+    },
+
+    /// Advance the viewport position by display rows (same offset semantics as `RenderLines`).
+    AdvanceLines {
+        file_path: String,
+        current: u64,
+        delta: i64,
+        width: u16,
+    },
+
+    /// Human-readable position string for the status bar.
+    Status { file_path: String, position: u64 },
+
+    /// Non-interactive dump with optional range (protocol alternative to `dump` CLI).
+    Dump {
+        file_path: String,
+        offset: u64,
+        length: Option<u64>,
+    },
 }
 
 /// Response from plugin to host.
@@ -93,6 +122,21 @@ pub enum PluginResponse {
     /// Data returned for a `ReadBytes` request.
     ReadBytesResult { data: Vec<u8> },
 
+    /// Lines to display in the TUI content area.
+    RenderLinesResult { lines: Vec<String> },
+
+    /// New viewport position after `AdvanceLines`.
+    AdvanceLinesResult { position: u64 },
+
+    /// Status text for the footer (viewer may include offset / line hints).
+    StatusResult { status: String },
+
+    /// UTF-8 dump output for `Dump` requests.
+    DumpResult { output: String },
+
     /// Generic error.
     Error { message: String },
 }
+
+/// Default timeout for external plugin subprocesses.
+pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;

@@ -1,11 +1,11 @@
 //! rcat-viewer-json — External plugin for viewing JSON files.
-//!
-//! This is the first external plugin used to validate the plugin system.
 
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 
 use rcat_core::FileViewer;
+use rcat_core::dump::DumpOptions;
 use rcat_core::file_info::FileInfo;
 use rcat_core::plugin::{
     PluginCapability, PluginDefaultPriority, PluginHandles, PluginInfo, PluginRequest,
@@ -16,9 +16,60 @@ use serde_json::{Value, from_slice, to_string_pretty};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
-    // Initialize logging to stderr only (never stdout, to protect the JSON protocol).
-    // If RCAT_LOG_FILE is set (usually by the rcat host), we also append to that file
-    // so that host + plugin logs are merged in one place.
+    init_logging();
+
+    let args: Vec<String> = std::env::args().collect();
+
+    // Host-driven protocol: spawned as `rcat-viewer-json` with JSON on stdin (no subcommand).
+    // Interactive use with no args: show help instead of waiting on stdin.
+    if args.len() == 1 {
+        if io::stdin().is_terminal() {
+            print_usage_and_exit();
+        }
+        if let Err(e) = run_protocol_once() {
+            tracing::error!("Protocol error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[1] == "--plugin-info" {
+        print_plugin_info();
+        return;
+    }
+
+    if args.len() >= 3 && args[1] == "dump" {
+        if let Err(e) = handle_dump(&args[2], &DumpOptions::default()) {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Unknown subcommand — if stdin is piped, try protocol (defensive).
+    if !io::stdin().is_terminal() {
+        if let Err(e) = run_protocol_once() {
+            tracing::error!("Protocol error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    eprintln!("Unknown command: {}", args[1]);
+    eprintln!("Try --plugin-info or dump <file>");
+    std::process::exit(2);
+}
+
+fn print_usage_and_exit() -> ! {
+    eprintln!("rcat-viewer-json — JSON viewer plugin for rcat");
+    eprintln!();
+    eprintln!("Invoked by the rcat host via JSON on stdin/stdout, or for testing:");
+    eprintln!("  rcat-viewer-json --plugin-info");
+    eprintln!("  rcat-viewer-json dump <file>");
+    std::process::exit(0);
+}
+
+fn init_logging() {
     let filter = if let Ok(v) = std::env::var("RCAT_LOG") {
         EnvFilter::new(v)
     } else if let Ok(v) = std::env::var("RUST_LOG") {
@@ -27,41 +78,31 @@ fn main() {
         EnvFilter::new("rcat_viewers_json=info")
     };
 
-    // Same policy as the host:
-    // - If RCAT_LOG_FILE is set (host told us where to log), we write *only* to the file.
-    //   Never to stderr — this protects both the JSON protocol and the host TUI.
-    // - Otherwise we write only to stderr (normal standalone plugin behavior).
     let log_file_env = std::env::var("RCAT_LOG_FILE").ok();
 
     if let Some(ref path_str) = log_file_env {
-        let path = std::path::PathBuf::from(path_str);
+        let path = PathBuf::from(path_str);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
         match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(file) => {
-                // Quiet announcement when driven by host (will go to the file itself)
-                tracing::debug!("plugin also logging to {}", path.display());
-
                 let file_layer = fmt::layer()
                     .with_writer(file)
                     .with_ansi(false)
                     .with_target(true);
-
                 tracing_subscriber::registry()
                     .with(filter)
                     .with(file_layer)
                     .init();
             }
             Err(e) => {
-                // Hard failure case — we have no choice but to complain to stderr
                 eprintln!(
-                    "Warning (rcat-viewer-json): failed to open RCAT_LOG_FILE {:?}: {}",
-                    path, e
+                    "Warning (rcat-viewer-json): failed to open RCAT_LOG_FILE {:?}: {e}",
+                    path
                 );
-                // Fallback to stderr
-                let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_ansi(true);
+                let stderr_layer = fmt::layer().with_writer(io::stderr).with_ansi(true);
                 tracing_subscriber::registry()
                     .with(filter)
                     .with(stderr_layer)
@@ -69,67 +110,18 @@ fn main() {
             }
         }
     } else {
-        // No log file requested → classic stderr-only behavior
-        let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_ansi(true);
+        let stderr_layer = fmt::layer().with_writer(io::stderr).with_ansi(true);
         tracing_subscriber::registry()
             .with(filter)
             .with(stderr_layer)
             .init();
     }
-
-    tracing::debug!("rcat-viewer-json starting");
-
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() <= 1 {
-        // No arguments — this is the common case when a user runs the plugin directly.
-        // We should never hang on stdin in this situation.
-        eprintln!("rcat-viewer-json — JSON viewer plugin for rcat");
-        eprintln!();
-        eprintln!("This binary is meant to be invoked by the rcat host, not run directly.");
-        eprintln!();
-        eprintln!("Available commands (for development/testing):");
-        eprintln!("  rcat-viewer-json --plugin-info");
-        eprintln!("  rcat-viewer-json dump <file>");
-        eprintln!();
-        eprintln!("When used as a plugin, the host communicates via JSON over stdin/stdout.");
-        eprintln!();
-        eprintln!(
-            "Logging: set RCAT_LOG=debug (or RUST_LOG). Use RCAT_LOG_FILE to also write to a file."
-        );
-        std::process::exit(0);
-    }
-
-    if args[1] == "--plugin-info" {
-        print_plugin_info();
-        return;
-    }
-
-    // Simple mode for testing: support "dump <file>"
-    if args.len() >= 3 && args[1] == "dump" {
-        let path = &args[2];
-        if let Err(e) = handle_dump(path) {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    // Default: run as protocol handler (reads JSON requests from stdin)
-    // This is the normal path when invoked by the rcat host.
-    tracing::info!("Starting in protocol mode (waiting for JSON on stdin)");
-    if let Err(e) = run_protocol() {
-        tracing::error!("Protocol error: {}", e);
-        std::process::exit(1);
-    }
 }
 
 fn print_plugin_info() {
-    tracing::debug!("Responding to --plugin-info");
-
     let info = PluginInfo {
         name: "JSON".to_string(),
-        version: "0.2.0".to_string(),
+        version: "0.3.0".to_string(),
         protocol_version: "1".to_string(),
         capabilities: vec![
             PluginCapability::CanHandle,
@@ -147,32 +139,127 @@ fn print_plugin_info() {
     println!("{}", serde_json::to_string_pretty(&info).unwrap());
 }
 
-fn handle_dump(path: &str) -> io::Result<()> {
+fn handle_dump(path: &str, opts: &DumpOptions) -> io::Result<()> {
     let info = FileInfo::from_path(path)?;
     let viewer = JsonViewerLogic;
-    let mut stdout = std::io::stdout();
-    let opts = rcat_core::dump::DumpOptions::default();
-    viewer.dump(&info, &mut stdout, &opts)
+    let mut stdout = io::stdout();
+    viewer.dump(&info, &mut stdout, opts)
 }
 
-/// Very basic JSON logic extracted so it can be reused.
+/// Read one JSON line from stdin, write one JSON line to stdout, exit.
+fn run_protocol_once() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    if line.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "empty plugin request",
+        ));
+    }
+
+    let request: PluginRequest = serde_json::from_str(&line)?;
+    let response = handle_request(&request)?;
+    let response_json = serde_json::to_string(&response)?;
+    writeln!(io::stdout(), "{response_json}")?;
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
+    let logic = JsonViewerLogic;
+
+    Ok(match request {
+        PluginRequest::CanHandle {
+            preliminary,
+            initial_data,
+            ..
+        } => {
+            let looks_like_json = preliminary.mime_type.as_deref() == Some("application/json")
+                || preliminary.extension.as_deref() == Some("json")
+                || looks_like_json_data(initial_data);
+
+            let priority = if looks_like_json {
+                ViewerPriority::Preferred
+            } else {
+                ViewerPriority::None
+            };
+            PluginResponse::CanHandleResult { priority }
+        }
+
+        PluginRequest::RenderLines {
+            file_path,
+            start_offset,
+            max_rows,
+            width: _,
+        } => {
+            let lines = logic.render_lines_at(Path::new(file_path), *start_offset, *max_rows)?;
+            PluginResponse::RenderLinesResult { lines }
+        }
+
+        PluginRequest::AdvanceLines {
+            file_path,
+            current,
+            delta,
+            width: _,
+        } => {
+            let position = logic.advance_lines_at(Path::new(file_path), *current, *delta)?;
+            PluginResponse::AdvanceLinesResult { position }
+        }
+
+        PluginRequest::Status {
+            file_path,
+            position,
+        } => {
+            let status = logic.status_at(Path::new(file_path), *position)?;
+            PluginResponse::StatusResult { status }
+        }
+
+        PluginRequest::Dump {
+            file_path,
+            offset,
+            length,
+        } => {
+            let opts = DumpOptions {
+                offset: *offset,
+                length: *length,
+            };
+            let mut buf = Vec::new();
+            let info = FileInfo::from_path(file_path)?;
+            logic.dump(&info, &mut buf, &opts)?;
+            PluginResponse::DumpResult {
+                output: String::from_utf8_lossy(&buf).into_owned(),
+            }
+        }
+
+        PluginRequest::ReadBytes { .. } => PluginResponse::Error {
+            message: "ReadBytes not supported by rcat-viewer-json".to_string(),
+        },
+    })
+}
+
+fn looks_like_json_data(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    let s = String::from_utf8_lossy(data);
+    let trimmed = s.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
+}
+
 struct JsonViewerLogic;
 
 impl JsonViewerLogic {
-    fn pretty_lines(&self, info: &FileInfo) -> Vec<String> {
+    fn pretty_lines_from_path(&self, path: &Path) -> io::Result<Vec<String>> {
+        let info = FileInfo::from_path(path)?;
         if info.size == 0 {
-            return vec!["(empty file)".to_string()];
+            return Ok(vec!["(empty file)".to_string()]);
         }
 
-        let mut file = match std::fs::File::open(&info.path) {
-            Ok(f) => f,
-            Err(_) => return vec!["(error opening file)".to_string()],
-        };
-
+        let mut file = std::fs::File::open(path)?;
         let mut buf = Vec::new();
-        if file.read_to_end(&mut buf).is_err() {
-            return vec!["(read error)".to_string()];
-        }
+        file.read_to_end(&mut buf)?;
 
         let pretty = match from_slice::<Value>(&buf) {
             Ok(value) => to_string_pretty(&value)
@@ -184,100 +271,75 @@ impl JsonViewerLogic {
             }
         };
 
-        pretty.lines().map(|l| l.to_string()).collect()
+        Ok(pretty.lines().map(|l| l.to_string()).collect())
+    }
+
+    fn line_count(&self, path: &Path) -> io::Result<usize> {
+        Ok(self.pretty_lines_from_path(path)?.len().max(1))
+    }
+
+    fn render_lines_at(
+        &self,
+        path: &Path,
+        start_offset: u64,
+        max_rows: u16,
+    ) -> io::Result<Vec<String>> {
+        let all = self.pretty_lines_from_path(path)?;
+        let start = start_offset as usize;
+        let lines: Vec<String> = all
+            .iter()
+            .skip(start)
+            .take(max_rows as usize)
+            .cloned()
+            .collect();
+        Ok(if lines.is_empty() {
+            vec!["(end of file)".to_string()]
+        } else {
+            lines
+        })
+    }
+
+    fn advance_lines_at(&self, path: &Path, current: u64, delta: i64) -> io::Result<u64> {
+        let total = self.line_count(path)?;
+        let max_pos = total.saturating_sub(1) as u64;
+        let new_pos = (current as i64 + delta).max(0) as u64;
+        Ok(new_pos.min(max_pos))
+    }
+
+    fn status_at(&self, path: &Path, position: u64) -> io::Result<String> {
+        let total = self.line_count(path)?;
+        let pct = if total == 0 {
+            0
+        } else {
+            ((position as f64 / total as f64) * 100.0) as u32
+        };
+        Ok(format!(
+            "JSON  line {}/{} ({pct}%)",
+            position + 1,
+            total.max(1)
+        ))
     }
 }
 
-impl rcat_core::FileViewer for JsonViewerLogic {
+impl FileViewer for JsonViewerLogic {
     fn name(&self) -> &'static str {
         "JSON"
     }
 
     fn can_handle(&self, _probe: &mut dyn rcat_core::probe::FileProbe) -> ViewerPriority {
-        // This implementation is only used internally by the plugin binary.
-        // The real can_handle decision happens in the protocol handler below.
         ViewerPriority::Preferred
     }
 
-    fn dump(
-        &self,
-        info: &FileInfo,
-        writer: &mut dyn Write,
-        _opts: &rcat_core::dump::DumpOptions,
-    ) -> io::Result<()> {
-        let lines = self.pretty_lines(info);
-        for line in lines {
-            writeln!(writer, "{}", line)?;
+    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> io::Result<()> {
+        let all = self.pretty_lines_from_path(&info.path)?;
+        let start = opts.offset as usize;
+        let end = match opts.length {
+            Some(len) => (start + len as usize).min(all.len()),
+            None => all.len(),
+        };
+        for line in &all[start..end] {
+            writeln!(writer, "{line}")?;
         }
         Ok(())
     }
-}
-
-/// Very basic protocol handler (for initial testing of the plugin system).
-fn run_protocol() -> io::Result<()> {
-    let stdin = io::stdin();
-    let reader = BufReader::new(stdin.lock());
-    let mut stdout = io::stdout();
-
-    tracing::debug!("Entered protocol read loop");
-
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        tracing::trace!(request = %line, "Received request from host");
-
-        let response = match serde_json::from_str::<PluginRequest>(&line) {
-            Ok(PluginRequest::CanHandle {
-                file_size: _,
-                preliminary,
-                initial_data,
-            }) => {
-                tracing::debug!(
-                    mime = ?preliminary.mime_type,
-                    ext = ?preliminary.extension,
-                    "Received CanHandle request"
-                );
-
-                let looks_like_json = preliminary.mime_type.as_deref() == Some("application/json")
-                    || preliminary.extension.as_deref() == Some("json")
-                    || looks_like_json_data(&initial_data);
-
-                let priority = if looks_like_json {
-                    ViewerPriority::Preferred
-                } else {
-                    ViewerPriority::None
-                };
-
-                tracing::debug!(?priority, "Responding to CanHandle");
-
-                PluginResponse::CanHandleResult { priority }
-            }
-
-            Ok(PluginRequest::ReadBytes { .. }) => PluginResponse::Error {
-                message: "ReadBytes not supported in this basic plugin version".to_string(),
-            },
-
-            Err(e) => PluginResponse::Error {
-                message: format!("Failed to parse request: {}", e),
-            },
-        };
-
-        let response_json = serde_json::to_string(&response)?;
-        writeln!(stdout, "{}", response_json)?;
-        stdout.flush()?;
-    }
-
-    Ok(())
-}
-
-fn looks_like_json_data(data: &[u8]) -> bool {
-    if data.is_empty() {
-        return false;
-    }
-    let s = String::from_utf8_lossy(data);
-    let trimmed = s.trim_start();
-    trimmed.starts_with('{') || trimmed.starts_with('[')
 }

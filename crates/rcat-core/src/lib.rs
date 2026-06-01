@@ -5,6 +5,7 @@
 //! This crate is intentionally free of TUI dependencies so it can be used
 //! both by the interactive TUI and by the non-interactive dump path.
 
+pub mod backing;
 pub mod detection;
 pub mod dump;
 pub mod external_plugin;

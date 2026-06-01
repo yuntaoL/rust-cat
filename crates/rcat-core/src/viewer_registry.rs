@@ -64,6 +64,16 @@ impl ViewerRegistry {
     pub fn is_empty(&self) -> bool {
         self.viewers.is_empty()
     }
+
+    /// Returns the index of the first viewer with the given name, if any.
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.viewers.iter().position(|v| v.name() == name)
+    }
+
+    /// Consume the registry and return owned viewers (for handing off to the TUI).
+    pub fn into_viewers(self) -> Vec<Box<dyn FileViewer>> {
+        self.viewers
+    }
 }
 
 impl Default for ViewerRegistry {
@@ -175,5 +185,23 @@ mod tests {
     fn default_registry_is_empty() {
         let reg: ViewerRegistry = Default::default();
         assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn index_of_finds_viewer_by_name() {
+        let mut reg = ViewerRegistry::new();
+        reg.register(Box::new(TestViewer::new("Alpha", ViewerPriority::Normal)));
+        reg.register(Box::new(TestViewer::new("Beta", ViewerPriority::Low)));
+        assert_eq!(reg.index_of("Beta"), Some(1));
+        assert_eq!(reg.index_of("Missing"), None);
+    }
+
+    #[test]
+    fn into_viewers_transfers_ownership() {
+        let mut reg = ViewerRegistry::new();
+        reg.register(Box::new(TestViewer::new("Only", ViewerPriority::Normal)));
+        let viewers = reg.into_viewers();
+        assert_eq!(viewers.len(), 1);
+        assert_eq!(viewers[0].name(), "Only");
     }
 }

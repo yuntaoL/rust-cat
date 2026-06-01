@@ -44,15 +44,13 @@ The `Viewer` trait + priority system is deliberately the stable extension bounda
 
 ## External Command Plugins (Runtime)
 
-`rcat` will discover executables named `rcat-*` in `PATH` or `~/.config/rcat/plugins/`.
+`rcat` discovers executables named `rcat-viewer-*` or `rcat-plugin-*` next to the `rcat` binary and in `~/.config/rcat/plugins/`.
 
-Protocol (to be fully specified in v0.2):
+The v1 JSON protocol (stdin/stdout, one request per process) is documented in **[docs/plugins.md](docs/plugins.md)**.
 
-- `rcat-foo can-handle <path>` → JSON with priority + name
-- `rcat-foo render --offset N --height H --width W <path>` → lines or drawing instructions
-- `rcat-foo metadata <path>` → key/value tree for sidebar
+Capabilities: `can_handle`, `dump`, `render_lines` (plus `advance_lines` / `status` for TUI scrolling).
 
-This design allows plugins in any language while keeping the core safe and fast.
+Reference plugin: `crates/rcat-viewers-json` → `rcat-viewer-json`.
 
 ## Code Formatting
 

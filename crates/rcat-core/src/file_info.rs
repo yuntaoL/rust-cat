@@ -4,6 +4,9 @@
 //! the dump logic operate on.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::backing::FileBacking;
 
 /// High-level classification of the file content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -36,6 +39,10 @@ pub struct FileInfo {
     /// Result of the core's first-pass detection using `infer` + heuristics.
     /// Viewers can (and should) rely on this for most common formats.
     pub detected: crate::detection::PreliminaryDetection,
+
+    /// Optional mmap backing (set by the host for interactive / large-file paths).
+    #[doc(hidden)]
+    pub backing: Option<Arc<FileBacking>>,
 }
 
 impl FileInfo {
@@ -76,7 +83,14 @@ impl FileInfo {
             type_description,
             extension,
             detected,
+            backing: None,
         })
+    }
+
+    /// Attach a memory map created by the host (avoids re-opening in viewers).
+    pub fn with_backing(mut self, backing: Arc<FileBacking>) -> Self {
+        self.backing = Some(backing);
+        self
     }
 
     /// Returns true if this file should be treated as text by default.
