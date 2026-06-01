@@ -11,6 +11,7 @@ use crate::plugin::{
     DEFAULT_PLUGIN_TIMEOUT_SECS, PluginCapability, PluginInfo, PluginRequest, PluginResponse,
 };
 use crate::probe::FileProbe;
+use crate::view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
 use crate::viewer::{FileViewer, ViewerPriority};
 use tracing::{debug, trace, warn};
 
@@ -241,6 +242,31 @@ impl FileViewer for ExternalPluginViewer {
         }
         writer.write_all(&output.stdout)?;
         Ok(())
+    }
+
+    fn position_kind(&self) -> PositionKind {
+        self.info.position_kind.unwrap_or(PositionKind::Byte)
+    }
+
+    fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
+        let anchor = ctx.anchor;
+        let lines = self.render_lines(
+            ctx.info(),
+            ctx.anchor_raw(),
+            ctx.max_rows,
+            ctx.content_width,
+        );
+        let status = self.status(ctx.info(), ctx.anchor_raw());
+        ViewportResult {
+            lines,
+            status,
+            anchor,
+        }
+    }
+
+    fn advance_anchor(&self, ctx: &ViewContext, delta: i64) -> ViewAnchor {
+        let raw = self.advance_lines(ctx.info(), ctx.anchor_raw(), delta, ctx.content_width);
+        ViewAnchor::from_raw(self.position_kind(), raw)
     }
 
     fn render_lines(

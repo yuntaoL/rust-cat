@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::view::PositionKind;
+
 /// Response from a plugin's `--plugin-info` command.
 /// This must be implemented by all external plugins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +31,10 @@ pub struct PluginInfo {
     /// Suggested default priority when this plugin matches.
     #[serde(default)]
     pub default_priority: PluginDefaultPriority,
+
+    /// How scroll position is interpreted in TUI requests (v2+; optional in v1 plugins).
+    #[serde(default)]
+    pub position_kind: Option<PositionKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

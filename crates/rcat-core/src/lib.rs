@@ -12,10 +12,14 @@ pub mod external_plugin;
 pub mod file_info;
 pub mod plugin;
 pub mod probe;
+pub mod session;
+pub mod view;
 pub mod viewer;
 pub mod viewer_registry;
 
 pub use file_info::FileInfo;
 pub use probe::{DETECTION_READ_LIMIT, FileProbe, FileProbeWithInfo, PrefixProbe};
+pub use session::FileSession;
+pub use view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
 pub use viewer::{FileViewer, ViewerPriority};
 pub use viewer_registry::ViewerRegistry;

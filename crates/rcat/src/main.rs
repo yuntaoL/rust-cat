@@ -4,8 +4,7 @@
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::generate;
-use rcat_core::backing::FileBacking;
-use rcat_core::file_info::FileInfo;
+use rcat_core::FileSession;
 use rcat_core::plugin::PluginCapability;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
 use rcat_core::{ViewerRegistry, dump};
@@ -138,13 +137,12 @@ fn run_on_path(
     use_stdout: bool,
     app_config: &rcat_cli::config::RcatConfig,
 ) -> anyhow::Result<()> {
-    let backing = FileBacking::open(path)?;
-    let info = FileInfo::from_path(path)?.with_backing(backing);
+    let session = FileSession::open(path)?;
 
     let registry = build_registry(app_config)?;
 
     let prefix_probe = PrefixProbe::from_path(path)?;
-    let mut probe = FileProbeWithInfo::new(&info, prefix_probe);
+    let mut probe = FileProbeWithInfo::new(session.info(), prefix_probe);
 
     let initial_viewer_index = match mode {
         ViewMode::Hex => registry.index_of("Hex").unwrap_or(0),
@@ -174,7 +172,7 @@ fn run_on_path(
         let opts = dump::DumpOptions { offset, length };
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        selected_viewer.dump(&info, &mut lock, &opts)?;
+        selected_viewer.dump(session.info(), &mut lock, &opts)?;
     } else {
         let viewers = registry.into_viewers();
         if viewers.is_empty() {
@@ -182,7 +180,7 @@ fn run_on_path(
         }
 
         rcat_tui::run_tui(rcat_tui::TuiConfig {
-            info,
+            session,
             viewers,
             initial_viewer_index,
             initial_offset: offset,

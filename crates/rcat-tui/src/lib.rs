@@ -16,6 +16,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use rcat_core::file_info::FileInfo;
+use rcat_core::{FileSession, PositionKind, ViewAnchor, ViewContext};
 use std::io::{self, stdout};
 use styling::render_content_lines;
 use terminal::TerminalGuard;
@@ -26,7 +27,8 @@ use tracing::{debug, trace};
 const SIDEBAR_WIDTH: u16 = 28;
 
 pub struct TuiConfig {
-    pub info: FileInfo,
+    /// Host-owned file session (mmap + metadata).
+    pub session: FileSession,
     /// All registered viewers (built-in + plugins), in registration order.
     pub viewers: Vec<Box<dyn rcat_core::FileViewer>>,
     /// Index into `viewers` for the initially active viewer.
@@ -41,7 +43,7 @@ pub fn run_tui(config: TuiConfig) -> Result<()> {
         .map(|v| v.name())
         .unwrap_or("?");
     debug!(
-        file = %config.info.path.display(),
+        file = %config.session.path().display(),
         viewer = initial_name,
         viewer_count = config.viewers.len(),
         "starting TUI"
@@ -51,7 +53,7 @@ pub fn run_tui(config: TuiConfig) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(
-        config.info,
+        config.session,
         config.viewers,
         config.initial_viewer_index,
         config.initial_offset,
@@ -70,8 +72,6 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use rcat_core::file_info::FileInfo;
-    use std::path::PathBuf;
-
     /// A controllable viewer used only in tests.
     /// It returns a predictable grid of lines based on the requested offset and width.
     struct TestViewer {
@@ -92,6 +92,10 @@ mod tests {
     }
 
     impl rcat_core::FileViewer for TestViewer {
+        fn position_kind(&self) -> rcat_core::PositionKind {
+            rcat_core::PositionKind::DisplayLine
+        }
+
         fn name(&self) -> &'static str {
             self.name
         }
@@ -140,31 +144,23 @@ mod tests {
         }
     }
 
-    fn make_test_file_info() -> FileInfo {
-        // We only need a few fields for the viewer methods above
-        FileInfo {
-            path: PathBuf::from("/tmp/test.txt"),
-            absolute_path: None,
-            size: 1000,
-            kind: rcat_core::file_info::ContentKind::Text,
-            type_description: "text".to_string(),
-            extension: Some("txt".to_string()),
-            detected: rcat_core::detection::PreliminaryDetection::default(),
-            backing: None,
-        }
+    fn make_test_session() -> FileSession {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello world\n").unwrap();
+        FileSession::open(f.path()).unwrap()
     }
 
     #[test]
     fn app_new_and_offset() {
-        let info = make_test_file_info();
-        let app = App::new(info, vec![Box::new(TestViewer::default())], 0, 42);
+        let session = make_test_session();
+        let app = App::new(session, vec![Box::new(TestViewer::default())], 0, 42);
         assert_eq!(app.offset(), 42);
     }
 
     #[test]
     fn apply_scroll_changes_offset() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 5);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::default())], 0, 5);
 
         app.apply(TuiAction::ScrollDown(3), 80);
         assert_eq!(app.offset(), 8);
@@ -175,9 +171,9 @@ mod tests {
 
     #[test]
     fn toggle_viewer_cycles_and_preserves_offset() {
-        let info = make_test_file_info();
+        let session = make_test_session();
         let mut app = App::new(
-            info,
+            session,
             vec![
                 Box::new(TestViewer::new("A", 10)),
                 Box::new(TestViewer::new("B", 10)),
@@ -198,8 +194,8 @@ mod tests {
 
     #[test]
     fn render_app_produces_expected_lines() {
-        let info = make_test_file_info();
-        let app = App::new(info, vec![Box::new(TestViewer::new("Test", 10))], 0, 2);
+        let session = make_test_session();
+        let app = App::new(session, vec![Box::new(TestViewer::new("Test", 10))], 0, 2);
 
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -225,8 +221,8 @@ mod tests {
 
     #[test]
     fn go_to_end_and_start() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 50))], 0, 10);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 50))], 0, 10);
 
         app.apply(TuiAction::GoToEnd, 80);
         assert_eq!(app.offset(), 49);
@@ -237,8 +233,8 @@ mod tests {
 
     #[test]
     fn render_respects_content_width() {
-        let info = make_test_file_info();
-        let app = App::new(info, vec![Box::new(TestViewer::new("Test", 5))], 0, 0);
+        let session = make_test_session();
+        let app = App::new(session, vec![Box::new(TestViewer::new("Test", 5))], 0, 0);
 
         let backend = TestBackend::new(20, 6);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -257,8 +253,8 @@ mod tests {
 
     #[test]
     fn multiple_actions_sequence() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 100))], 0, 50);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 100))], 0, 50);
 
         app.apply(TuiAction::ScrollDown(10), 80);
         app.apply(TuiAction::PageUp(20), 80);
@@ -274,8 +270,8 @@ mod tests {
 
     #[test]
     fn scroll_down_and_up_work() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 100))], 0, 10);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 100))], 0, 10);
 
         app.apply(TuiAction::ScrollDown(5), 80);
         assert_eq!(app.offset(), 15);
@@ -286,8 +282,8 @@ mod tests {
 
     #[test]
     fn page_down_and_page_up_use_the_provided_size() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 200))], 0, 10);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 200))], 0, 10);
 
         // Page size of 30
         app.apply(TuiAction::PageDown(30), 80);
@@ -299,8 +295,8 @@ mod tests {
 
     #[test]
     fn go_to_start_and_go_to_end() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 80))], 0, 35);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 80))], 0, 35);
 
         app.apply(TuiAction::GoToStart, 80);
         assert_eq!(app.offset(), 0);
@@ -311,8 +307,8 @@ mod tests {
 
     #[test]
     fn navigation_clamps_at_boundaries() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 30))], 0, 5);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 30))], 0, 5);
 
         // Can't go below 0
         app.apply(TuiAction::ScrollUp(20), 80);
@@ -334,8 +330,8 @@ mod tests {
 
     #[test]
     fn large_page_down_from_near_start() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::new("Test", 1000))], 0, 3);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 1000))], 0, 3);
 
         // Big page jump
         app.apply(TuiAction::PageDown(100), 80);
@@ -344,8 +340,8 @@ mod tests {
 
     #[test]
     fn toggle_metadata_flips_sidebar_flag() {
-        let info = make_test_file_info();
-        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 0);
+        let session = make_test_session();
+        let mut app = App::new(session, vec![Box::new(TestViewer::default())], 0, 0);
         assert!(!app.show_metadata());
         app.apply(TuiAction::ToggleMetadata, 80);
         assert!(app.show_metadata());
@@ -355,20 +351,14 @@ mod tests {
 
     #[test]
     fn render_with_metadata_sidebar_shows_mime() {
-        let info = FileInfo {
-            path: PathBuf::from("/tmp/test.json"),
-            absolute_path: None,
-            size: 100,
-            kind: rcat_core::file_info::ContentKind::Text,
-            type_description: "JSON".to_string(),
-            extension: Some("json".to_string()),
-            detected: rcat_core::detection::PreliminaryDetection {
-                mime_type: Some("application/json".to_string()),
-                ..Default::default()
-            },
-            backing: None,
-        };
-        let mut app = App::new(info, vec![Box::new(TestViewer::default())], 0, 0);
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, br#"{"a":1}"#).unwrap();
+        let mut info = FileInfo::from_path(f.path()).unwrap();
+        info.type_description = "JSON".to_string();
+        info.extension = Some("json".to_string());
+        info.detected.mime_type = Some("application/json".to_string());
+        let session = FileSession::from_info(info).unwrap();
+        let mut app = App::new(session, vec![Box::new(TestViewer::default())], 0, 0);
         app.apply(TuiAction::ToggleMetadata, 80);
 
         let backend = TestBackend::new(100, 20);
@@ -405,10 +395,10 @@ pub enum TuiAction {
 }
 
 struct App {
-    info: FileInfo,
+    session: FileSession,
     viewers: Vec<Box<dyn rcat_core::FileViewer>>,
     viewer_index: usize,
-    offset: u64,
+    anchor: ViewAnchor,
     show_help: bool,
     show_metadata: bool,
     theme: Theme,
@@ -417,7 +407,7 @@ struct App {
 impl App {
     /// Creates a new App. Useful for tests and the real TUI.
     pub fn new(
-        info: FileInfo,
+        session: FileSession,
         viewers: Vec<Box<dyn rcat_core::FileViewer>>,
         viewer_index: usize,
         offset: u64,
@@ -427,15 +417,27 @@ impl App {
         } else {
             viewer_index.min(viewers.len() - 1)
         };
+        let kind = viewers
+            .get(viewer_index)
+            .map(|v| v.position_kind())
+            .unwrap_or(rcat_core::PositionKind::Byte);
         Self {
-            info,
+            session,
             viewers,
             viewer_index,
-            offset,
+            anchor: ViewAnchor::from_raw(kind, offset),
             show_help: false,
             show_metadata: false,
             theme: Theme::default(),
         }
+    }
+
+    fn info(&self) -> &FileInfo {
+        self.session.info()
+    }
+
+    fn scroll_ctx(&self, width: u16) -> ViewContext<'_> {
+        ViewContext::new(&self.session, self.anchor, width, 1)
     }
 
     #[cfg(test)]
@@ -454,41 +456,55 @@ impl App {
 
     #[cfg(test)]
     pub fn offset(&self) -> u64 {
-        self.offset
+        self.anchor.raw()
     }
 
     /// Applies a high-level action to the app state.
     /// `width` is passed to width-aware viewers for correct scrolling inside wrapped lines.
     pub fn apply(&mut self, action: TuiAction, width: u16) {
-        let old_offset = self.offset;
+        let old_anchor = self.anchor;
         let old_viewer = self.active_viewer().name().to_string();
         match action {
             TuiAction::Quit => {}
             TuiAction::ScrollDown(n) => {
-                self.offset =
-                    self.active_viewer()
-                        .advance_lines(&self.info, self.offset, n as i64, width);
+                self.anchor = self
+                    .active_viewer()
+                    .advance_anchor(&self.scroll_ctx(width), n as i64);
             }
             TuiAction::ScrollUp(n) => {
-                self.offset =
-                    self.active_viewer()
-                        .advance_lines(&self.info, self.offset, -(n as i64), width);
+                self.anchor = self
+                    .active_viewer()
+                    .advance_anchor(&self.scroll_ctx(width), -(n as i64));
             }
             TuiAction::PageDown(n) => {
-                self.offset =
-                    self.active_viewer()
-                        .advance_lines(&self.info, self.offset, n as i64, width);
+                self.anchor = self
+                    .active_viewer()
+                    .advance_anchor(&self.scroll_ctx(width), n as i64);
             }
             TuiAction::PageUp(n) => {
-                self.offset =
-                    self.active_viewer()
-                        .advance_lines(&self.info, self.offset, -(n as i64), width);
+                self.anchor = self
+                    .active_viewer()
+                    .advance_anchor(&self.scroll_ctx(width), -(n as i64));
             }
-            TuiAction::GoToStart => self.offset = 0,
+            TuiAction::GoToStart => {
+                let kind = self.active_viewer().position_kind();
+                self.anchor = ViewAnchor::from_raw(kind, 0);
+            }
             TuiAction::GoToEnd => {
-                self.offset =
-                    self.active_viewer()
-                        .advance_lines(&self.info, self.info.size, -8, width);
+                let kind = self.active_viewer().position_kind();
+                // Byte viewers: start from EOF. Line/frame viewers: start past the end
+                // so advance_lines clamps to the last display row (same as legacy behavior).
+                let jump = match kind {
+                    PositionKind::Byte => self.session.size(),
+                    PositionKind::DisplayLine | PositionKind::Frame => u64::MAX / 2,
+                };
+                let end_ctx = ViewContext::new(
+                    &self.session,
+                    ViewAnchor::from_raw(kind, jump),
+                    width,
+                    1,
+                );
+                self.anchor = self.active_viewer().advance_anchor(&end_ctx, -8);
             }
             TuiAction::ToggleHelp => {
                 self.show_help = !self.show_help;
@@ -496,10 +512,13 @@ impl App {
             TuiAction::ToggleViewer => {
                 if self.viewers.len() > 1 {
                     self.viewer_index = (self.viewer_index + 1) % self.viewers.len();
+                    let kind = self.active_viewer().position_kind();
+                    self.anchor = ViewAnchor::from_raw(kind, self.anchor.raw());
                     debug!(
                         viewer = self.active_viewer().name(),
-                        offset = self.offset,
-                        "switched viewer (offset preserved)"
+                        anchor = self.anchor.raw(),
+                        ?kind,
+                        "switched viewer (anchor value preserved)"
                     );
                 }
             }
@@ -507,8 +526,12 @@ impl App {
                 self.show_metadata = !self.show_metadata;
             }
         }
-        if self.offset != old_offset {
-            trace!(old = old_offset, new = self.offset, "offset changed");
+        if self.anchor != old_anchor {
+            trace!(
+                old = old_anchor.raw(),
+                new = self.anchor.raw(),
+                "anchor changed"
+            );
         }
         if self.active_viewer().name() != old_viewer.as_str() {
             trace!(
@@ -622,13 +645,14 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
     } else {
         viewer.name().to_string()
     };
-    let pct = position_percent(app.offset, app.info.size);
+    let anchor_raw = app.anchor.raw();
+    let pct = position_percent(anchor_raw, app.session.size());
     let header_text = format!(
         " {}  ·  {}  ·  {}  ·  offset 0x{:X} ({pct}%)",
-        app.info.path.display(),
-        metadata::format_file_size(app.info.size),
+        app.session.path().display(),
+        metadata::format_file_size(app.session.size()),
         viewer_label,
-        app.offset
+        anchor_raw
     );
     let header = Paragraph::new(header_text).style(theme.header).block(
         Block::default()
@@ -643,7 +667,7 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(SIDEBAR_WIDTH)])
             .split(main_area);
-        render_metadata_sidebar(f, split[1], &app.info, theme);
+        render_metadata_sidebar(f, split[1], app.info(), theme);
         let width = split[0].width.saturating_sub(4).max(8).min(usable_width);
         (split[0], width)
     } else {
@@ -652,8 +676,9 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
     };
 
     let max_rows = content_area.height.saturating_sub(1).max(1);
-    let raw_lines = viewer.render_lines(&app.info, app.offset, max_rows, content_width);
-    let content_lines = render_content_lines(viewer.name(), raw_lines, &theme);
+    let ctx = ViewContext::new(&app.session, app.anchor, content_width, max_rows);
+    let viewport = viewer.render_viewport(&ctx);
+    let content_lines = render_content_lines(viewer.name(), viewport.lines, &theme);
 
     let content = Paragraph::new(content_lines)
         .block(
@@ -664,15 +689,15 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
         .wrap(Wrap { trim: false });
     f.render_widget(content, content_area);
 
-    let viewer_status = viewer.status(&app.info, app.offset);
-    let pct = position_percent(app.offset, app.info.size);
+    let viewer_status = viewport.status;
+    let pct = position_percent(anchor_raw, app.session.size());
     let mut hints = vec!["q quit", "m meta", "? help"];
     if app.viewers.len() > 1 {
         hints.insert(1, "Tab/h viewer");
     }
     let footer_text = format!(
         " {viewer_status}  ·  0x{:X} ({pct}%)  │  {}",
-        app.offset,
+        anchor_raw,
         hints.join("  ")
     );
     let footer = Paragraph::new(footer_text).style(theme.footer).block(

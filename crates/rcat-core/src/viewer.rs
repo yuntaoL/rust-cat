@@ -7,6 +7,7 @@ use std::io::Write;
 use crate::dump::DumpOptions;
 use crate::file_info::FileInfo;
 use crate::probe::FileProbe;
+use crate::view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
 
 /// How strongly a viewer wants to handle a particular file.
 ///
@@ -60,6 +61,34 @@ pub trait FileViewer: Send + Sync {
         writer: &mut dyn Write,
         opts: &DumpOptions,
     ) -> std::io::Result<()>;
+
+    /// How this viewer interprets [`ViewAnchor`] / scroll position.
+    fn position_kind(&self) -> PositionKind {
+        PositionKind::Byte
+    }
+
+    /// Render a viewport for the interactive TUI (primary path).
+    ///
+    /// Built-in and plugin viewers should override this when possible. The default
+    /// composes [`render_lines`](Self::render_lines) and [`status`](Self::status) for
+    /// backward compatibility.
+    fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
+        let anchor = ctx.anchor;
+        let raw = ctx.anchor_raw();
+        let lines = self.render_lines(ctx.info(), raw, ctx.max_rows, ctx.content_width);
+        let status = self.status(ctx.info(), raw);
+        ViewportResult {
+            lines,
+            status,
+            anchor,
+        }
+    }
+
+    /// Advance scroll position by display rows according to this viewer's model.
+    fn advance_anchor(&self, ctx: &ViewContext, delta: i64) -> ViewAnchor {
+        let raw = self.advance_lines(ctx.info(), ctx.anchor_raw(), delta, ctx.content_width);
+        ViewAnchor::from_raw(self.position_kind(), raw)
+    }
 
     /// Render a viewport of the file as **display rows** for the TUI.
     ///
@@ -129,7 +158,6 @@ pub trait FileViewer: Send + Sync {
 mod tests {
     use super::*;
     use crate::file_info::FileInfo;
-    use std::path::PathBuf;
 
     // Minimal viewer that only implements name and can_handle
     struct DummyViewer;
@@ -156,21 +184,22 @@ mod tests {
     #[test]
     fn default_render_lines_and_advance_are_used() {
         let viewer = DummyViewer;
-        let info = FileInfo {
-            path: PathBuf::from("/tmp/dummy"),
-            absolute_path: None,
-            size: 100,
-            kind: crate::file_info::ContentKind::Text,
-            type_description: "text".into(),
-            extension: None,
-            detected: crate::detection::PreliminaryDetection::default(),
-            backing: None,
-        };
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"x").unwrap();
+        let session = crate::FileSession::open(f.path()).unwrap();
 
-        let lines = viewer.render_lines(&info, 0, 10, 80);
+        let lines = viewer.render_lines(session.info(), 0, 10, 80);
         assert!(lines[0].contains("Dummy viewer"));
 
-        let new_pos = viewer.advance_lines(&info, 10, 5, 80);
+        let new_pos = viewer.advance_lines(session.info(), 10, 5, 80);
         assert_eq!(new_pos, 10 + 5 * 16); // default 16-byte steps
+
+        let ctx = ViewContext::at_byte(&session, 0, 80, 10);
+        let vp = viewer.render_viewport(&ctx);
+        assert!(vp.lines[0].contains("Dummy viewer"));
+        assert!(vp.status.contains("Dummy"));
+
+        let ctx2 = ViewContext::at_byte(&session, 10, 80, 1);
+        assert_eq!(viewer.advance_anchor(&ctx2, 5).raw(), 10 + 5 * 16);
     }
 }

@@ -11,6 +11,7 @@ use rcat_core::plugin::{
     PluginCapability, PluginDefaultPriority, PluginHandles, PluginInfo, PluginRequest,
     PluginResponse,
 };
+use rcat_core::view::PositionKind;
 use rcat_core::viewer::ViewerPriority;
 use serde_json::{Value, from_slice, to_string_pretty};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -134,6 +135,7 @@ fn print_plugin_info() {
             magic: vec![],
         },
         default_priority: PluginDefaultPriority::Preferred,
+        position_kind: Some(PositionKind::DisplayLine),
     };
 
     println!("{}", serde_json::to_string_pretty(&info).unwrap());
