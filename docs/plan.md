@@ -6,14 +6,15 @@
 
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
-**Date**: 2026-06 (last major update)  
-**Status**: Implementation well advanced. Phases 0–3 largely complete (workspace, core, TUI, multiple viewers, strong navigation). Logging wired to all components (Phase 5 foundation). Active focus on **Phase 4 UX polish** + finishing robust external plugin protocol (pull model, timeouts, error handling, render_lines path). Excellent testability and ~76% line coverage already achieved.
+**Date**: 2026-06-01 (last major update)  
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete** (theming, help, metadata sidebar, hex/json styling, panic-safe terminal). Phase 5 foundation **complete** (plugin protocol v1, config, stdin spool, completions, `FileBacking` mmap). **Blocking v0.1 work** is now the **Unified Session & Large-File track** (PR1–PR5 below): one host memory model and one data path for built-in and plugin viewers. **PR1 done** (`FileSession`, `ViewContext`, `render_viewport`). **Next: PR2** (dirty TUI redraw + viewport cache). JSON strategy: **ambitious streaming pretty-print first**, with tiered fallback if needed.
 
 ## Quick Navigation
 
 - [Program Definition & Scope](#2-program-definition-what-we-are-building)
 - [Architecture Overview](#3-high-level-architecture)
 - **[Implementation Phases & Detailed Content (the main plan)](#8-implementation-phases--milestones)**
+- **[Execution Track: Unified Session & Large Files (PR1–PR5)](#15-execution-track-unified-session--large-files-pr1pr5)** ← pick up here
 - [Verification Strategy](#9-verification--quality-strategy)
 - [GitHub & DevEx Requirements](#13-git-github-hosting-and-development-experience-added-per-review-feedback)
 - [Progress Log](#14-progress-log-implementation)
@@ -25,13 +26,14 @@
 | Phase | Focus                                                      | Status                  | Notes |
 |-------|------------------------------------------------------------|-------------------------|-------|
 | 0     | Setup, workspace, first working `rcat --version` binary, GitHub scaffolding | **Complete**           | Done early |
-| 1     | Core foundations (`FileInfo`, detection, `Viewer` trait, registry) | **Largely Complete**   | Strong test coverage |
+| 1     | Core foundations (`FileInfo`, detection, `Viewer` trait, registry) | **Complete**           | Strong test coverage |
 | 2     | TUI shell + event loop + first viewer                      | **Complete**           | Ratatui + crossterm |
 | 3     | Second viewer + unified navigation + polish                | **Complete**           | Text + Hex + JSON viewers; good paging/scrolling |
-| 4     | **UX Polish + Viewer Quality** (current focus)             | **In Progress**        | Theming, Help (`?`), metadata, visual quality of viewers |
-| 5     | Extensibility hooks (plugins + logging), config, release   | **Foundation complete**| Logging done across workspace; plugin protocol (discovery, ExternalPluginViewer, JSON integration test) in progress |
+| 4     | UX polish + viewer quality                                 | **Largely complete**   | Theming, `?` help, `m` metadata, hex/json styling, panic hook |
+| 5     | Extensibility hooks (plugins + logging), config, stdin     | **Foundation complete**| Protocol v1, discovery, timeouts, `~/.config/rcat/config.toml`, completions |
+| **M** | **Memory model + protocol v2 (PR1–PR5)** — **blocks v0.1** | **In progress (PR1 done)** | See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) |
 
-**Total for v0.1**: ~3–5 weeks focused work.
+**Total for v0.1**: Original 3–5 week estimate; remaining work is mostly Phase **M** + release checklist.
 
 ---
 
@@ -107,39 +109,68 @@ This aligns with the user's existing Rust workspace patterns (see `rustai-forge`
 
 ## 3. High-Level Architecture
 
-### 3.1 Core Abstraction: The `Viewer` Trait
+### 3.1 Core Abstraction: `FileSession` + `FileViewer` (implemented PR1)
+
+**Design principle (2026-06):** Built-in viewers (Text, Hex) and external plugins (JSON, future Markdown/image/video) share the **same** host memory model and TUI contract. Plugins differ only in parse/format/render — not in how bytes are obtained.
 
 ```rust
-pub trait FileViewer: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn can_handle(&self, info: &FileInfo) -> ViewerPriority; // None / Low / Normal / Preferred
-    fn render(&mut self, ctx: &RenderContext) -> Result<()>;
-    fn metadata_panel(&self, info: &FileInfo) -> Option<MetadataPanel>;
-    // future: handle_input, search, etc.
+// Host-owned (rcat-core/src/session.rs)
+pub struct FileSession { /* FileInfo + Arc<FileBacking> — always mmap'd */ }
+
+// Per-frame viewport input (rcat-core/src/view.rs)
+pub struct ViewContext<'a> {
+    pub session: &'a FileSession,
+    pub anchor: ViewAnchor,      // Byte | DisplayLine | Frame
+    pub content_width: u16,
+    pub max_rows: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ViewerPriority { None, Low, Normal, Preferred }
+pub struct ViewportResult {
+    pub lines: Vec<String>,
+    pub status: String,
+    pub anchor: ViewAnchor,
+}
+
+pub trait FileViewer: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority;
+    fn position_kind(&self) -> PositionKind;  // byte | display_line | frame
+    fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult;  // primary TUI path
+    fn advance_anchor(&self, ctx: &ViewContext, delta: i64) -> ViewAnchor;
+    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> io::Result<()>;
+    // Legacy (migration): render_lines, advance_lines, status — default via render_viewport
+}
 ```
 
-- Built-in: `TextViewer`, `HexViewer`
-- Later plugins register additional implementations (via registry or dynamic loading)
-- The TUI holds a `Vec<Box<dyn FileViewer>>` or an enum-dispatch equivalent and selects the highest-priority handler (or lets the user force via `--text` / `--hex`).
+- Built-in: `TextViewer`, `HexViewer` (in-process; Hex uses `session.slice()` in `render_viewport`).
+- External: `ExternalPluginViewer` adapter → JSON plugin today; same trait boundary.
+- TUI: `Vec<Box<dyn FileViewer>>`, Tab/`h` cycles viewers; calls `render_viewport` each frame (PR2 will cache).
 
-### 3.2 Unified Navigation Model (Critical Decision)
-**Single source of truth**: byte `offset: u64` + viewport height/width.
+### 3.2 Navigation Model
 
-- Text mode derives the visible line range from the byte offset (using a line-start index built once at load).
-- Hex mode derives the visible 16-byte rows directly from the offset.
-- Switching modes preserves the user's position (you stay "looking at the same bytes").
-- This makes large-file handling and extensibility dramatically simpler.
+**Host header/footer** still show a hex-style offset for familiarity; **semantic position** is `ViewAnchor`:
+
+| `PositionKind` | Used by | Anchor meaning |
+|----------------|---------|----------------|
+| `byte` | Text, Hex | Byte offset into mmap |
+| `display_line` | JSON (pretty), future Markdown | 0-based row in viewer output |
+| `frame` | Future video | Frame index |
+
+- Switching viewers preserves the raw anchor **value** (v0.1); unified byte↔line translation is v0.2+.
+- Text: byte offset + line index (index not yet shared in host — PR4).
+- Hex: byte offset, 16-byte rows from `session.slice`.
 
 ### 3.3 File Handling Strategy
-- Always use `memmap2::Mmap` (read-only) for the backing store.
-- `FileInfo` struct contains: path, size, detected MIME/magic/extension, is_text_heuristic, etc.
-- Text detection: `content_inspector` crate + extension hints + BOM/UTF-8 validity sampling. Never trust extension alone.
-- For text: build a `Vec<u64>` of line-start byte offsets (one pass, O(n) but fast and done once). Enables O(1) "what line is at byte X?" queries.
-- Streaming / stdin support: fall back to a limited in-memory buffer or temp file when input is not a seekable file.
+
+**Implemented:**
+- `FileBacking` + `FileSession::open` — single mmap per open file; host attaches before TUI.
+- Stdin → temp file spool (`rcat-cli::stdin`).
+- Plugin protocol v1: JSON stdin/stdout, `ReadBytes` type exists but plugins still read `file_path` in practice.
+
+**Target (PR3–PR5):**
+- Protocol **v2**: long-lived plugin session; host serves `ReadBytes` from mmap (no plugin `read_to_end` in TUI).
+- Shared `LineIndex` in host for line-oriented viewers (text, NDJSON).
+- **JSON (ambitious path):** streaming/incremental pretty-print with session cache; fallback tiers (NDJSON per-line, text+syntax for huge arbitrary JSON) if streaming cannot meet goals.
 
 ### 3.4 TUI Architecture (Ratatui Best Practices)
 Follow the widely recommended pattern from the Ratatui community (2025 discussions):
@@ -402,27 +433,26 @@ Examples:
 - Toggle, scrolling, Home/End/Page keys working well
 - Good test coverage of navigation actions
 
-**Phase 4 — UX Polish + Viewer Quality (Current Focus)**
-- Color scheme and theming (especially Hex viewer coloring)
-- Help overlay triggered by `?`
-- Improved status bar + optional metadata sidebar (toggle with `m`)
-- Visual quality improvements for Text, Hex, and JSON viewers
-- Better error handling and graceful degradation
-- Panic recovery + clean terminal restore
+**Phase 4 — UX Polish + Viewer Quality** *(largely complete)*
+- [x] Color scheme and theming (hex + JSON bracket styling)
+- [x] Help overlay (`?`)
+- [x] Metadata sidebar (`m`)
+- [x] Viewer cycling (Tab / `h`) across registry
+- [x] Panic hook + terminal restore (`TerminalGuard`)
+- [ ] Search / goto (deferred v0.2)
+- [ ] Unified byte offset when toggling Text ↔ Hex (deferred)
 
-**Phase 5 — Extensibility Hooks + Release**
-- Document the `Viewer` trait as the primary extension point
-- Skeleton for external command plugin discovery
-- Basic config file support (colors, defaults)
-- Packaging and release process
-- High-quality README with screenshots and keybindings
+**Phase 5 — Extensibility Hooks** *(foundation complete)*
+- [x] `Viewer` trait + registry
+- [x] External plugin discovery (`rcat-viewer-*`, `~/.config/rcat/plugins/`)
+- [x] Protocol v1 (`can_handle`, `render_lines`, `advance_lines`, `status`, `dump`)
+- [x] `ExternalPluginViewer` + JSON plugin + integration tests
+- [x] Config (`plugin_timeout_secs`), shell completions, stdin spool
+- [x] Logging (`RCAT_LOG`, `RCAT_LOG_FILE`, `-v`, `--log-file`)
+- [ ] Protocol v2 (session IPC + `ReadBytes`) — see Phase **M**
+- [ ] Packaging / v0.1 release — after Phase **M**
 
-**Phase 5 — Extensibility Hooks + Release (3–5 days)**
-- Document the `Viewer` trait as the extension point
-- Skeleton for external command plugin discovery (even if no real plugins yet)
-- Config file loading (even if only colors / defaults)
-- Packaging (homebrew formula stub, cargo-dist or manual release)
-- README with screenshots + keybinding cheat sheet
+**Phase M — Unified session & large files (PR track)** — see [Section 15](#15-execution-track-unified-session--large-files-pr1pr5)
 
 **Total estimated effort for a high-quality v0.1**: 3–5 weeks of focused work (can be faster with pair programming or heavy use of Ratatui recipes).
 
@@ -617,6 +647,67 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 
 ---
 
+## 15. Execution Track: Unified Session & Large Files (PR1–PR5)
+
+> **Resume here** if a conversation or session is lost. This track is **required for v0.1** — without it, large files and plugins (especially JSON) do not meet the product bar.
+
+### Goals
+
+1. **One memory model:** Host owns mmap (`FileSession`); viewers/plugins never `read_to_end` the file per TUI frame.
+2. **One TUI contract:** `render_viewport` / `advance_anchor` for built-ins and plugins alike.
+3. **One data protocol (v2):** Plugins pull bytes via `ReadBytes`; optional long-lived subprocess per active viewer in TUI.
+4. **Extensible:** Same path for future Markdown, image, video plugins — only parse/render differs.
+
+### PR checklist
+
+| PR | Title | Status | Commit / notes |
+|----|--------|--------|----------------|
+| **PR1** | `FileSession` + `ViewContext` + `render_viewport` | **Done** | `90705e6` — `session.rs`, `view.rs`; Hex via `session.slice()`; TUI uses `ViewportResult`; JSON plugin declares `position_kind: display_line` |
+| **PR2** | Dirty TUI redraw + viewport cache | **Next** | Stop ~20 plugin spawns/sec on idle; cache `(viewer, anchor, width, height)` |
+| **PR3** | Protocol v2 skeleton + session subprocess | Pending | `Open` → `ReadBytes` / `RenderViewport` → `Close`; document in `docs/plugins.md` |
+| **PR4** | Text + Hex on session only | Pending | Text: stop re-`open` per frame; shared `LineIndex` (host) |
+| **PR5** | JSON plugin tiers + ambitious streaming | Pending | See JSON strategy below |
+
+### Known gaps (pre-PR2)
+
+| Area | Issue |
+|------|--------|
+| TUI loop | Redraws every ~50 ms; calls `render_viewport` every frame |
+| JSON plugin | `read_to_end` + full `serde_json::Value` + pretty on every `render_lines` |
+| Text viewer | Re-opens file; does not use `FileSession` slice API |
+| Plugins | One-shot subprocess per request; `ReadBytes` unused |
+| Offset on viewer toggle | Raw anchor preserved; byte ↔ line not converted |
+
+### JSON strategy (product decision 2026-06-01)
+
+**Primary:** Ambitious streaming / incremental pretty-print (core differentiator). Spike after PR2–PR3.
+
+| Tier | When | Approach |
+|------|------|----------|
+| S | Small file (e.g. ≤ ~2 MiB) | `serde_json` → pretty lines; cache in plugin session |
+| S-fast | Same, CPU-bound | Optional `sonic-rs` |
+| NDJSON | One JSON value per line | Per-line `serde_json` / `jsonlines` |
+| L | Large arbitrary JSON | **Fallback:** text viewer + JSON syntax styling (no full DOM) |
+| Invalid | Parse error on sample | Raw slice + error hint |
+
+**Libraries:** `serde_json` (keep), `sonic-rs` (optional fast path), custom or specialized streaming formatter for ambitious path — evaluate `json-tools` / incremental lexer during PR5 spike.
+
+### Architecture diagram (target)
+
+```
+Host: FileSession (mmap)
+  → ViewContext → FileViewer::render_viewport → ViewportResult
+       ├─ TextViewer / HexViewer (in-process)
+       └─ ExternalPluginViewer → protocol v2 → rcat-viewer-json / markdown / …
+```
+
+### Related docs
+
+- Plugin protocol (v1 today): `docs/plugins.md`
+- Development workflow: `docs/development.md`
+
+---
+
 ## 14. Progress Log (Implementation)
 
 ### 2026-05-26 — Phase 0 Complete (First Commit)
@@ -662,10 +753,9 @@ We can now discuss, refine, and continue execution with confidence.
 - Added `cargo-llvm-cov` integration via `just` (`coverage` and `coverage-check` with 50% threshold, enforced in CI).
 - CI improvements and removal of deprecated actions.
 
-**Current Focus (as of this update):**
-Actively working on **Phase 4 — UX Polish + Viewer Quality** + **Phase 5 foundation** (external plugins + logging) in tight iteration loops:
+**Historical focus (mid-2026-06):** Phase 4 UX + Phase 5 plugin foundation (iterations below). **Superseded by Section 15** — unified session / large-file PR track as of 2026-06-01.
 
-**Iteration 1 (completed in this session):**
+**Iteration 1 (completed):**
 - Added proper color coding to the Hex viewer (address dim, nulls gray, printable green, non-printable red, ASCII cyan).
 - Added unit test for the Hex styling helper.
 - All changes passed `just lint` and relevant tests.
@@ -699,7 +789,35 @@ Actively working on **Phase 4 — UX Polish + Viewer Quality** + **Phase 5 found
 
 **Work Process**: Every change follows the loop — implement → add tests → run `just lint` → update relevant documentation → repeat until the feature area is complete and polished.
 
-See the new dedicated work section below for detailed task breakdown.
+See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for the active PR track.
+
+---
+
+### 2026-06-01 — Sprint: TUI registry, plugins, UX (pre-PR1)
+
+**Completed (on `main` before PR1):**
+
+- TUI uses full `ViewerRegistry`; Tab/`h` cycles viewers.
+- Metadata sidebar (`m`), theme, panic-safe `TerminalGuard`.
+- Plugin protocol v1, `~/.config/rcat/config.toml`, stdin spool, shell completions.
+- `FileBacking` mmap in host; plugin JSON fix (protocol mode when stdin piped).
+- Tests: protocol integration, ~60+ tests passing.
+
+---
+
+### 2026-06-01 — PR1: FileSession + ViewContext (`90705e6`)
+
+**Completed:**
+
+- `rcat-core`: `FileSession`, `ViewContext`, `ViewAnchor`, `PositionKind`, `ViewportResult`.
+- `FileViewer`: `render_viewport`, `advance_anchor`, `position_kind`; legacy methods kept.
+- `PluginInfo.position_kind` for external plugins.
+- Host: `FileSession::open` in `main`; TUI `TuiConfig { session, … }`.
+- Hex: `render_viewport` via `session.slice()`.
+- JSON plugin: `--plugin-info` includes `display_line`.
+- All workspace tests green.
+
+**Next:** PR2 (dirty redraw + cache).
 
 ---
 
@@ -715,26 +833,26 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 
 ---
 
-## Current Work: Phase 4 — UX Polish + Viewer Quality (2026-06)
+## Current Work (2026-06-01) — pick up here
 
-**Active Priorities (in order):**
+**Active track:** [Section 15 — PR1–PR5](#15-execution-track-unified-session--large-files-pr1pr5)
 
-### 1. TUI UX Polish
-- [ ] Global + viewer-aware color theming (using Ratatui `Style` + `Color`)
-- [ ] Help overlay (`?` key) with keybindings and viewer-specific info
-- [ ] Toggleable metadata sidebar (`m` key)
-- [ ] Improved status bar (position, percentage, file type, etc.)
-- [ ] Consistent visual language across Text / Hex / JSON
+| Priority | Task | Status |
+|----------|------|--------|
+| 1 | **PR2** — Dirty TUI redraw + viewport cache | **Next** |
+| 2 | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | Pending |
+| 3 | **PR4** — Text/Hex session-only I/O + line index | Pending |
+| 4 | **PR5** — JSON ambitious streaming + tier fallbacks | Pending |
+| 5 | v0.1 release checklist (large-file manual tests, README) | After PR5 |
 
-### 2. Viewer Quality
-- [ ] **Hex Viewer**: Proper color coding (address, hex bytes by category, ASCII printable vs non-printable), better spacing and alignment
-- [ ] **Text Viewer**: Subtle coloring or styling for better readability
-- [ ] **JSON Viewer**: Nicer presentation of pretty-printed output
+**Phase 4 (UX) — mostly done:**
 
-**Process Rule**: No task is considered complete until:
-- Functionality works well in the TUI
-- Relevant unit/integration tests are added (and pass)
-- `just lint` passes cleanly (fmt + clippy -D warnings)
-- Documentation is updated where relevant (`docs/development.md`, README, plan.md, code comments)
+- [x] Theming + hex/json styling
+- [x] Help (`?`), metadata (`m`), viewer toggle
+- [x] Panic-safe terminal
 
-See the Progress Log for the latest iteration status.
+**Deferred to v0.2+:** search/goto, unified offset on viewer switch, syntax highlighting feature flag.
+
+**Process rule:** implement → tests → `just lint` → update `docs/plan.md` + `docs/plugins.md` when protocol changes.
+
+**Latest commit:** `90705e6` — PR1 (`FileSession`, `ViewContext`, `render_viewport`).
