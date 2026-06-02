@@ -7,14 +7,15 @@
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
 **Date**: 2026-06-02 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR5 done** (execution track). JSON viewer uses tiered pretty / NDJSON / raw fallback; byte-anchored scroll across viewers.
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 + M2 done**. Execution track **PR1–PR5 complete**; JSON interactive view is raw bytes + syntax colors (M1 contract). **Next:** v0.1 release checklist.
 
 ## Quick Navigation
 
 - [Program Definition & Scope](#2-program-definition-what-we-are-building)
 - [Architecture Overview](#3-high-level-architecture)
 - **[Implementation Phases & Detailed Content (the main plan)](#8-implementation-phases--milestones)**
-- **[Execution Track: Unified Session & Large Files (PR1–PR5)](#15-execution-track-unified-session--large-files-pr1pr5)** ← pick up here
+- [Execution Track: Unified Session & Large Files (PR1–PR5)](#15-execution-track-unified-session--large-files-pr1pr5)
+- **[Current Work & v0.1 checklist](#current-work-2026-06-02--pick-up-here)** ← pick up here
 - [Verification Strategy](#9-verification--quality-strategy)
 - [GitHub & DevEx Requirements](#13-git-github-hosting-and-development-experience-added-per-review-feedback)
 - [Progress Log](#14-progress-log-implementation)
@@ -667,7 +668,7 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 | **PR2** | Dirty TUI redraw + viewport cache | **Done** | `needs_redraw` + `ViewportCache` key `(viewer, anchor, width, rows)`; idle poll skips draw/render |
 | **PR3** | Protocol v2 skeleton + session subprocess | **Done** | `PluginSession`, `--session`, `Open`/`ReadBytes`/`RenderViewport`/`Close`; `docs/plugins.md` |
 | **PR4** | Text + Hex on session only | **Done** | `text_slice` over mmap; `render_viewport` / `advance_anchor` use `FileSession` bytes |
-| **PR5** | JSON plugin tiers + pretty/NDJSON/raw fallback | **Done** | `tiers.rs`, per-path cache, byte anchors preserved |
+| **PR5** | JSON tiers (detection) + raw interactive view | **Done** | `tiers.rs`; TUI raw bytes (`010d8e9` regression fix) |
 
 ### Known gaps (post-PR5)
 
@@ -891,6 +892,33 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 
 ---
 
+### 2026-06-02 — Milestone M2: Unified session & large files (PR1–PR5)
+
+**Milestone tag:** `milestone-m2-unified-session-pr1-pr5` (annotated on `main` at `010d8e9`)
+
+**Completed (execution track):**
+
+- **PR1** — `FileSession`, `ViewContext`, `render_viewport` / `advance_anchor`
+- **PR2** — Dirty TUI redraw, `ViewportCache`
+- **PR3** — Protocol v2, `PluginSession`, `ReadBytes`, `--session` subprocess
+- **PR4** — Text/Hex render from mmap slices only (no per-frame reopen)
+- **PR5** — JSON tier detection (`tiers.rs`); interactive view stays **raw** for key order + byte sync (M1)
+
+**Quality:** Workspace tests green; line coverage **≥ 75%** (`just coverage-check`).
+
+**Commits (newest first on this milestone):**
+
+- `010d8e9` — fix(json): restore raw interactive view
+- `239488a` — feat(json): PR5 tier detection
+- `d76a3d3` — PR4 Text/Hex session slices
+- `48ae9a5` — PR3 protocol v2 session
+- `a8f94fb` — PR2 viewport cache
+- (PR1 + M1 baseline: `90705e6`, `milestone-m1-viewer-correctness`)
+
+**Next:** v0.1 release checklist (README, large-file manual QA).
+
+---
+
 ## Note on This Document
 
 This file (`docs/plan.md`) **inside the repository** is the official plan that travels with the codebase.
@@ -905,15 +933,12 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 
 ## Current Work (2026-06-02) — pick up here
 
-**Milestone M1:** complete. **Active track:** [Section 15 — PR1–PR5](#15-execution-track-unified-session--large-files-pr1pr5)
+**Milestones:** [M1](#2026-06-02--milestone-m1-viewer-correctness--test-baseline) (`milestone-m1-viewer-correctness`) · [M2](#2026-06-02--milestone-m2-unified-session--large-files-pr1pr5) (`milestone-m2-unified-session-pr1-pr5`) — **both complete**.
 
 | Priority | Task | Status |
 |----------|------|--------|
 | — | **M1** — Viewer correctness + 75% coverage | **Done** |
-| — | **PR2** — Dirty TUI redraw + viewport cache | **Done** |
-| — | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Done** |
-| — | **PR4** — Text/Hex session-only I/O | **Done** |
-| — | **PR5** — JSON tiered pretty / NDJSON / raw fallback | **Done** |
+| — | **M2** — Unified session / PR1–PR5 execution track | **Done** |
 | 1 | v0.1 release checklist (large-file manual tests, README) | **Next** |
 
 **Phase 4 (UX) — mostly done:**
