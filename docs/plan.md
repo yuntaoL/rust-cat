@@ -7,7 +7,7 @@
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
 **Date**: 2026-06-02 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done** (viewer correctness + 75% coverage). **PR1 done**. **PR2 done** (dirty redraw + viewport cache). **Next: PR3** (protocol v2 + `ReadBytes` + session subprocess). JSON interactive view is raw+highlight; **PR5** adds optional streaming pretty-print tiers.
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR3 done** (session, viewport cache, protocol v2). **Next: PR4** (Text/Hex session-only I/O). JSON interactive view is raw+highlight; **PR5** adds optional streaming pretty-print tiers.
 
 ## Quick Navigation
 
@@ -665,16 +665,16 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 | **PR1** | `FileSession` + `ViewContext` + `render_viewport` | **Done** | `90705e6` — `session.rs`, `view.rs`; Hex via `session.slice()`; TUI uses `ViewportResult` |
 | **M1** | Viewer correctness + test baseline | **Done** | `2178c3d`+ — raw JSON, byte sync across viewers, path-based JSON selection, 75% coverage gate |
 | **PR2** | Dirty TUI redraw + viewport cache | **Done** | `needs_redraw` + `ViewportCache` key `(viewer, anchor, width, rows)`; idle poll skips draw/render |
-| **PR3** | Protocol v2 skeleton + session subprocess | **Next** | `Open` → `ReadBytes` / `RenderViewport` → `Close`; document in `docs/plugins.md` |
-| **PR4** | Text + Hex on session only | Pending | Text: stop re-`open` per frame; shared `LineIndex` (host) |
+| **PR3** | Protocol v2 skeleton + session subprocess | **Done** | `PluginSession`, `--session`, `Open`/`ReadBytes`/`RenderViewport`/`Close`; `docs/plugins.md` |
+| **PR4** | Text + Hex on session only | **Next** | Text: stop re-`open` per frame; shared `LineIndex` (host) |
 | **PR5** | JSON plugin tiers + ambitious streaming | Pending | See JSON strategy below |
 
-### Known gaps (pre-PR3)
+### Known gaps (pre-PR4)
 
 | Area | Issue |
 |------|--------|
 | Text viewer | Re-opens file; does not use `FileSession` slice API |
-| Plugins | One-shot subprocess per request; `ReadBytes` unused |
+| Built-in viewers | In-process; external plugins use v2 session when `protocol_version: 2` |
 | JSON pretty-print | Deferred to PR5; interactive path is raw file + syntax colors (M1) |
 
 ### JSON strategy (product decision 2026-06-01)
@@ -854,6 +854,21 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 
 ---
 
+### 2026-06-02 — PR3: Protocol v2 + plugin session
+
+**Completed:**
+
+- `PluginRequest`/`PluginResponse`: `open`, `close`, `render_viewport`, `read_bytes` (host→plugin with data), `need_read_bytes`.
+- `PluginSession` in `rcat-core`: spawns `--session`, line JSON IPC, satisfies `NeedReadBytes` from host mmap.
+- `ExternalPluginViewer`: reuses one subprocess per file when `protocol_version == "2"`.
+- `rcat-viewer-json`: `--session` loop, `session.rs` handler, plugin-info v2.
+- Tests: `session_protocol.rs`, `supports_protocol_v2` unit test.
+- `docs/plugins.md` rewritten for v1 + v2.
+
+**Next:** **PR4** — Text/Hex use `FileSession` slices only (no per-frame re-open).
+
+---
+
 ## Note on This Document
 
 This file (`docs/plan.md`) **inside the repository** is the official plan that travels with the codebase.
@@ -874,8 +889,8 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 |----------|------|--------|
 | — | **M1** — Viewer correctness + 75% coverage | **Done** |
 | — | **PR2** — Dirty TUI redraw + viewport cache | **Done** |
-| 1 | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Next** |
-| 3 | **PR4** — Text/Hex session-only I/O + line index | Pending |
+| — | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Done** |
+| 1 | **PR4** — Text/Hex session-only I/O + line index | **Next** |
 | 4 | **PR5** — JSON ambitious streaming + tier fallbacks | Pending |
 | 5 | v0.1 release checklist (large-file manual tests, README) | After PR5 |
 

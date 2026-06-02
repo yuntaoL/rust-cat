@@ -43,7 +43,8 @@ pub enum PluginCapability {
     CanHandle,
     Dump,
     RenderLines,
-    // Future: RenderRich, Metadata, Search, etc.
+    /// Long-lived `--session` subprocess; host serves bytes via `ReadBytes`.
+    SessionV2,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -83,8 +84,11 @@ pub enum PluginRequest {
         initial_data: Vec<u8>,
     },
 
-    /// Plugin is asking for more file data.
-    ReadBytes { offset: u64, length: usize },
+    /// Host provides file bytes to the plugin (v2 session pull from host mmap).
+    ReadBytes {
+        offset: u64,
+        data: Vec<u8>,
+    },
 
     /// Render a viewport for the interactive TUI.
     ///
@@ -120,6 +124,27 @@ pub enum PluginRequest {
 
     /// Display line index closest to a source byte offset (JSON sync).
     DisplayLineAtByte { file_path: String, byte: u64 },
+
+    // --- Protocol v2 (session subprocess) ---
+
+    /// Open a file in an existing `--session` plugin process.
+    Open {
+        file_path: String,
+        file_size: u64,
+        preliminary: crate::detection::PreliminaryDetection,
+        /// Prefix bytes from host mmap (usually first 16 KiB).
+        initial_data: Vec<u8>,
+    },
+
+    /// Close the current file in the session (process may keep running).
+    Close,
+
+    /// Combined TUI viewport (lines + status) for v2 sessions.
+    RenderViewport {
+        start_offset: u64,
+        max_rows: u16,
+        width: u16,
+    },
 }
 
 /// Response from plugin to host.
@@ -131,9 +156,13 @@ pub enum PluginResponse {
         priority: crate::viewer::ViewerPriority,
     },
 
-    /// Data returned for a `ReadBytes` request.
-    ReadBytesResult {
-        data: Vec<u8>,
+    /// Acknowledgement after the host supplied `ReadBytes` data.
+    ReadBytesResult,
+
+    /// Plugin needs more bytes from the host (v2 session); host should reply with `ReadBytes`.
+    NeedReadBytes {
+        offset: u64,
+        length: usize,
     },
 
     /// Lines to display in the TUI content area.
@@ -168,7 +197,79 @@ pub enum PluginResponse {
     Error {
         message: String,
     },
+
+    // --- Protocol v2 (session subprocess) ---
+
+    OpenResult,
+
+    CloseResult,
+
+    /// Combined viewport for v2 `RenderViewport` requests.
+    RenderViewportResult {
+        lines: Vec<String>,
+        status: String,
+        source_byte: Option<u64>,
+    },
 }
+
+/// Protocol version string for v2 (long-lived session + host `ReadBytes`).
+pub const PROTOCOL_VERSION_V2: &str = "2";
 
 /// Default timeout for external plugin subprocesses.
 pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;
+
+/// Returns true when the plugin advertises protocol v2 session support.
+pub fn supports_protocol_v2(info: &PluginInfo) -> bool {
+    info.protocol_version == PROTOCOL_VERSION_V2
+        || info.capabilities.contains(&PluginCapability::SessionV2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v2_request_types_serialize_with_snake_case_type() {
+        let open = PluginRequest::Open {
+            file_path: "/tmp/x.json".into(),
+            file_size: 10,
+            preliminary: Default::default(),
+            initial_data: vec![b'{'],
+        };
+        let json = serde_json::to_string(&open).unwrap();
+        assert!(json.contains("\"type\":\"open\""));
+
+        let rv = PluginRequest::RenderViewport {
+            start_offset: 0,
+            max_rows: 5,
+            width: 80,
+        };
+        assert!(serde_json::to_string(&rv).unwrap().contains("render_viewport"));
+
+        let close = PluginResponse::CloseResult;
+        assert!(
+            serde_json::to_string(&close)
+                .unwrap()
+                .contains("close_result")
+        );
+    }
+
+    #[test]
+    fn supports_v2_by_protocol_version_or_capability() {
+        let mut info = PluginInfo {
+            name: "T".into(),
+            version: "0".into(),
+            protocol_version: "1".into(),
+            capabilities: vec![PluginCapability::CanHandle],
+            handles: PluginHandles::default(),
+            default_priority: PluginDefaultPriority::default(),
+            position_kind: None,
+        };
+        assert!(!supports_protocol_v2(&info));
+        info.protocol_version = PROTOCOL_VERSION_V2.to_string();
+        assert!(supports_protocol_v2(&info));
+        info.protocol_version = "1".into();
+        info.capabilities.push(PluginCapability::SessionV2);
+        assert!(supports_protocol_v2(&info));
+    }
+}

@@ -4,8 +4,9 @@ use assert_cmd::cargo::cargo_bin;
 use rcat_core::dump::DumpOptions;
 use rcat_core::external_plugin::ExternalPluginViewer;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
+use rcat_core::view::ViewContext;
 use rcat_core::viewer::FileViewer;
-use rcat_core::FileInfo;
+use rcat_core::{FileInfo, FileSession, supports_protocol_v2};
 use std::io::Write;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -75,4 +76,30 @@ fn external_json_plugin_render_and_dump() {
     assert!(status.contains("JSON"));
     let advanced = viewer.advance_lines(&info, 0, 1, 80);
     assert!(advanced > 0);
+}
+
+#[test]
+fn external_json_v2_uses_session_for_render_viewport() {
+    let Some(plugin) = json_plugin_path() else {
+        eprintln!("skip: rcat-viewer-json not built");
+        return;
+    };
+
+    let mut f = NamedTempFile::new().unwrap();
+    write!(f, r#"{{"key":42}}"#).unwrap();
+    let session = FileSession::open(f.path()).unwrap();
+    let viewer = ExternalPluginViewer::with_timeout(plugin, Duration::from_secs(5)).unwrap();
+    assert!(
+        supports_protocol_v2(viewer.info()),
+        "json plugin should advertise v2"
+    );
+
+    let ctx = ViewContext::at_byte(&session, 0, 80, 5);
+    let vp = viewer.render_viewport(&ctx);
+    assert!(vp.lines.iter().any(|l| l.contains("key")));
+    assert!(vp.status.contains("JSON"));
+
+    // Second render reuses the same session (no error).
+    let vp2 = viewer.render_viewport(&ctx);
+    assert!(!vp2.lines.is_empty());
 }

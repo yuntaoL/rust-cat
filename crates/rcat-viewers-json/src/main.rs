@@ -1,7 +1,10 @@
 //! rcat-viewer-json — External plugin binary for viewing JSON files.
 
+mod session;
+
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::io::BufRead;
+use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::PathBuf;
 
 use rcat_core::FileViewer;
@@ -9,7 +12,7 @@ use rcat_core::dump::DumpOptions;
 use rcat_core::file_info::FileInfo;
 use rcat_core::plugin::{
     PluginCapability, PluginDefaultPriority, PluginHandles, PluginInfo, PluginRequest,
-    PluginResponse,
+    PluginResponse, PROTOCOL_VERSION_V2,
 };
 use rcat_core::view::PositionKind;
 use rcat_core::viewer::ViewerPriority;
@@ -34,6 +37,14 @@ fn main() {
 
     if args[1] == "--plugin-info" {
         print_plugin_info();
+        return;
+    }
+
+    if args[1] == "--session" {
+        if let Err(e) = run_protocol_session() {
+            tracing::error!("Session protocol error: {e}");
+            std::process::exit(1);
+        }
         return;
     }
 
@@ -64,6 +75,7 @@ fn print_usage_and_exit() -> ! {
     eprintln!("Shows the file as raw bytes with JSON syntax highlighting (no reformat).");
     eprintln!();
     eprintln!("  rcat-viewer-json --plugin-info");
+    eprintln!("  rcat-viewer-json --session     # protocol v2 (stdin/stdout loop)");
     eprintln!("  rcat-viewer-json dump <file>");
     std::process::exit(0);
 }
@@ -121,11 +133,12 @@ fn print_plugin_info() {
     let info = PluginInfo {
         name: "JSON".to_string(),
         version: "0.4.0".to_string(),
-        protocol_version: "1".to_string(),
+        protocol_version: PROTOCOL_VERSION_V2.to_string(),
         capabilities: vec![
             PluginCapability::CanHandle,
             PluginCapability::Dump,
             PluginCapability::RenderLines,
+            PluginCapability::SessionV2,
         ],
         handles: PluginHandles {
             extensions: vec!["json".to_string()],
@@ -242,9 +255,44 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
         }
 
         PluginRequest::ReadBytes { .. } => PluginResponse::Error {
-            message: "ReadBytes not supported by rcat-viewer-json".to_string(),
+            message: "ReadBytes is only valid in --session mode".to_string(),
+        },
+
+        PluginRequest::Open { .. }
+        | PluginRequest::Close
+        | PluginRequest::RenderViewport { .. } => PluginResponse::Error {
+            message: "use --session for Open/Close/RenderViewport".to_string(),
         },
     })
+}
+
+fn run_protocol_session() -> io::Result<()> {
+    use session::PluginSessionState;
+
+    let stdin = io::stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut state: Option<PluginSessionState> = None;
+
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let request: PluginRequest = serde_json::from_str(&line)?;
+        let close_after = matches!(request, PluginRequest::Close);
+        let response = session::handle_session_request(&mut state, &request)?;
+        writeln!(io::stdout(), "{}", serde_json::to_string(&response)?)?;
+        io::stdout().flush()?;
+        if close_after {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn looks_like_json_data(data: &[u8]) -> bool {

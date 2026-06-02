@@ -3,20 +3,29 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::dump::DumpOptions;
 use crate::file_info::FileInfo;
 use crate::plugin::{
     DEFAULT_PLUGIN_TIMEOUT_SECS, PluginCapability, PluginInfo, PluginRequest, PluginResponse,
+    supports_protocol_v2,
 };
+use crate::plugin_session::PluginSession;
 use crate::probe::FileProbe;
+use crate::session::FileSession;
 use crate::view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
 use crate::viewer::{FileViewer, ViewerPriority};
 use tracing::{debug, trace, warn};
 
+struct ActivePluginSession {
+    file_path: PathBuf,
+    session: PluginSession,
+}
+
 /// Forward logging-related environment variables to child plugin processes.
-fn configure_logging_for_child(cmd: &mut Command) {
+pub(crate) fn configure_logging_for_child(cmd: &mut Command) {
     for var in ["RCAT_LOG_FILE", "RCAT_LOG", "RUST_LOG"] {
         if let Ok(val) = std::env::var(var) {
             cmd.env(var, val);
@@ -104,6 +113,8 @@ pub struct ExternalPluginViewer {
     executable: PathBuf,
     info: PluginInfo,
     timeout: Duration,
+    /// Protocol v2 long-lived subprocess (reopened when the file path changes).
+    active_session: Mutex<Option<ActivePluginSession>>,
 }
 
 impl ExternalPluginViewer {
@@ -118,7 +129,45 @@ impl ExternalPluginViewer {
             executable,
             info,
             timeout,
+            active_session: Mutex::new(None),
         })
+    }
+
+    fn uses_session_v2(&self) -> bool {
+        supports_protocol_v2(&self.info)
+    }
+
+    fn with_plugin_session<R>(
+        &self,
+        host_session: &FileSession,
+        f: impl FnOnce(&mut PluginSession, &FileSession) -> std::io::Result<R>,
+    ) -> std::io::Result<R> {
+        let mut guard = self
+            .active_session
+            .lock()
+            .map_err(|e| std::io::Error::other(format!("plugin session lock poisoned: {e}")))?;
+
+        let path = host_session.path().to_path_buf();
+        let needs_new = guard
+            .as_ref()
+            .map(|s| s.file_path != path)
+            .unwrap_or(true);
+
+        if needs_new {
+            if let Some(mut old) = guard.take() {
+                let _ = old.session.close();
+            }
+            let mut plugin = PluginSession::spawn(&self.executable, self.timeout)?;
+            plugin.open(host_session)?;
+            *guard = Some(ActivePluginSession {
+                file_path: path,
+                session: plugin,
+            });
+        }
+
+        let active = guard.as_mut().expect("session slot populated");
+        active.session.open(host_session)?;
+        f(&mut active.session, host_session)
     }
 
     fn query_plugin_info(executable: &Path) -> std::io::Result<PluginInfo> {
@@ -264,6 +313,57 @@ impl FileViewer for ExternalPluginViewer {
 
     fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
         let anchor = ctx.anchor;
+        if self.uses_session_v2() {
+            let request = PluginRequest::RenderViewport {
+                start_offset: ctx.anchor_raw(),
+                max_rows: ctx.max_rows,
+                width: ctx.content_width,
+            };
+            match self.with_plugin_session(ctx.session, |plugin, host| {
+                plugin.request_with_file(&request, host)
+            }) {
+                Ok(PluginResponse::RenderViewportResult {
+                    lines,
+                    status,
+                    source_byte,
+                }) => {
+                    return ViewportResult {
+                        lines,
+                        status,
+                        anchor,
+                        source_byte,
+                    };
+                }
+                Ok(PluginResponse::Error { message }) => {
+                    return ViewportResult {
+                        lines: vec![format!("(plugin error: {message})")],
+                        status: format!("{} @ {}", self.name(), anchor.raw()),
+                        anchor,
+                        source_byte: None,
+                    };
+                }
+                Err(e) => {
+                    return ViewportResult {
+                        lines: vec![format!("(plugin error: {e})")],
+                        status: format!("{} @ {}", self.name(), anchor.raw()),
+                        anchor,
+                        source_byte: None,
+                    };
+                }
+                Ok(_) => {
+                    return ViewportResult {
+                        lines: vec![format!(
+                            "({} viewer: unexpected render_viewport response)",
+                            self.name()
+                        )],
+                        status: format!("{} @ {}", self.name(), anchor.raw()),
+                        anchor,
+                        source_byte: None,
+                    };
+                }
+            }
+        }
+
         let info = ctx.info();
         let lines = self.render_lines(info, ctx.anchor_raw(), ctx.max_rows, ctx.content_width);
         let status = self.status(info, ctx.anchor_raw());
@@ -328,6 +428,24 @@ impl FileViewer for ExternalPluginViewer {
             )];
         }
 
+        if self.uses_session_v2()
+            && let Ok(session) = FileSession::from_info(info.clone())
+        {
+            let request = PluginRequest::RenderLines {
+                file_path: path_str(info),
+                start_offset,
+                max_rows,
+                width,
+            };
+            if let Ok(PluginResponse::RenderLinesResult { lines }) =
+                self.with_plugin_session(&session, |plugin, host| {
+                    plugin.request_with_file(&request, host)
+                })
+            {
+                return lines;
+            }
+        }
+
         let request = PluginRequest::RenderLines {
             file_path: path_str(info),
             start_offset,
@@ -353,6 +471,24 @@ impl FileViewer for ExternalPluginViewer {
             return FileViewer::advance_lines(self, info, current, delta, width);
         }
 
+        if self.uses_session_v2()
+            && let Ok(session) = FileSession::from_info(info.clone())
+        {
+            let request = PluginRequest::AdvanceLines {
+                file_path: path_str(info),
+                current,
+                delta,
+                width,
+            };
+            if let Ok(PluginResponse::AdvanceLinesResult { position }) =
+                self.with_plugin_session(&session, |plugin, host| {
+                    plugin.request_with_file(&request, host)
+                })
+            {
+                return position;
+            }
+        }
+
         let request = PluginRequest::AdvanceLines {
             file_path: path_str(info),
             current,
@@ -369,6 +505,22 @@ impl FileViewer for ExternalPluginViewer {
     fn status(&self, info: &FileInfo, pos: u64) -> String {
         if !self.has_capability(PluginCapability::RenderLines) {
             return format!("{} @ {}", self.name(), pos);
+        }
+
+        if self.uses_session_v2()
+            && let Ok(session) = FileSession::from_info(info.clone())
+        {
+            let request = PluginRequest::Status {
+                file_path: path_str(info),
+                position: pos,
+            };
+            if let Ok(PluginResponse::StatusResult { status }) =
+                self.with_plugin_session(&session, |plugin, host| {
+                    plugin.request_with_file(&request, host)
+                })
+            {
+                return status;
+            }
         }
 
         let request = PluginRequest::Status {
