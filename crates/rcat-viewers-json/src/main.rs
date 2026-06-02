@@ -61,7 +61,8 @@ fn main() {
 fn print_usage_and_exit() -> ! {
     eprintln!("rcat-viewer-json — JSON viewer plugin for rcat");
     eprintln!();
-    eprintln!("Invoked by the rcat host via JSON on stdin/stdout, or for testing:");
+    eprintln!("Shows the file as raw bytes with JSON syntax highlighting (no reformat).");
+    eprintln!();
     eprintln!("  rcat-viewer-json --plugin-info");
     eprintln!("  rcat-viewer-json dump <file>");
     std::process::exit(0);
@@ -119,7 +120,7 @@ fn init_logging() {
 fn print_plugin_info() {
     let info = PluginInfo {
         name: "JSON".to_string(),
-        version: "0.3.1".to_string(),
+        version: "0.4.0".to_string(),
         protocol_version: "1".to_string(),
         capabilities: vec![
             PluginCapability::CanHandle,
@@ -132,7 +133,7 @@ fn print_plugin_info() {
             magic: vec![],
         },
         default_priority: PluginDefaultPriority::Preferred,
-        position_kind: Some(PositionKind::DisplayLine),
+        position_kind: Some(PositionKind::Byte),
     };
 
     println!("{}", serde_json::to_string_pretty(&info).unwrap());
@@ -190,9 +191,10 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
             file_path,
             start_offset,
             max_rows,
-            width: _,
+            width,
         } => {
-            let lines = logic.render_lines_at(Path::new(file_path), *start_offset, *max_rows)?;
+            let info = FileInfo::from_path(file_path)?;
+            let lines = logic.render_lines(&info, *start_offset, *max_rows, *width);
             PluginResponse::RenderLinesResult { lines }
         }
 
@@ -200,9 +202,10 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
             file_path,
             current,
             delta,
-            width: _,
+            width,
         } => {
-            let position = logic.advance_lines_at(Path::new(file_path), *current, *delta)?;
+            let info = FileInfo::from_path(file_path)?;
+            let position = logic.advance_lines(&info, *current, *delta, *width);
             PluginResponse::AdvanceLinesResult { position }
         }
 
@@ -210,18 +213,9 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
             file_path,
             position,
         } => {
-            let status = logic.status_at(Path::new(file_path), *position)?;
+            let info = FileInfo::from_path(file_path)?;
+            let status = logic.status(&info, *position);
             PluginResponse::StatusResult { status }
-        }
-
-        PluginRequest::ByteAtDisplayLine { file_path, line } => {
-            let byte_offset = logic.byte_at_display_line(Path::new(file_path), *line)?;
-            PluginResponse::ByteAtDisplayLineResult { byte_offset }
-        }
-
-        PluginRequest::DisplayLineAtByte { file_path, byte } => {
-            let line = logic.display_line_at_byte(Path::new(file_path), *byte)?;
-            PluginResponse::DisplayLineAtByteResult { line }
         }
 
         PluginRequest::Dump {
@@ -238,6 +232,12 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
             logic.dump(&info, &mut buf, &opts)?;
             PluginResponse::DumpResult {
                 output: String::from_utf8_lossy(&buf).into_owned(),
+            }
+        }
+
+        PluginRequest::ByteAtDisplayLine { .. } | PluginRequest::DisplayLineAtByte { .. } => {
+            PluginResponse::Error {
+                message: "JSON viewer uses byte offsets only (raw file view)".to_string(),
             }
         }
 

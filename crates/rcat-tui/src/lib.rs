@@ -229,9 +229,10 @@ mod tests {
         assert_eq!(app.offset(), mid_byte);
         app.apply(TuiAction::ToggleViewer, 80);
         assert_eq!(app.active_viewer_name(), "JSON");
-        assert!(
-            app.offset() > 0,
-            "JSON display line should be > 0 when switching from mid-file text byte {mid_byte}"
+        assert_eq!(
+            app.offset(),
+            mid_byte,
+            "JSON raw view must keep the same byte offset as Text"
         );
     }
 
@@ -255,9 +256,10 @@ mod tests {
 
         app.apply(TuiAction::ToggleViewer, 80);
         assert_eq!(app.active_viewer_name(), "JSON");
-        assert!(
-            app.offset() > 0,
-            "JSON line should follow mid-file hex position"
+        assert_eq!(
+            app.offset(),
+            mid_byte,
+            "JSON raw view must keep the same byte offset as Hex"
         );
     }
 

@@ -44,7 +44,7 @@ The host runs `path/to/rcat-viewer-foo` **with no CLI arguments** and sends a si
 |-------|---------|
 | `position_kind` | `byte` (default), `display_line`, or `frame` — how TUI anchors map to scroll position |
 
-Example: JSON plugin sets `"position_kind": "display_line"`.
+Example: JSON plugin sets `"position_kind": "byte"` (raw file view; same coordinates as Text/Hex).
 
 ## Planned: protocol v2 (PR3)
 
