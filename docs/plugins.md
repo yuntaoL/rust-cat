@@ -103,11 +103,4 @@ Example (JSON plugin):
 
 ### JSON tiers (PR5)
 
-| Tier | When | Display |
-|------|------|---------|
-| **pretty** | ≤ 2 MiB, valid single JSON | `serde_json` pretty lines (cached) |
-| **ndjson** | ≥ 2 non-empty lines, each valid JSON | Per-source-line pretty |
-| **raw** | > 2 MiB | On-disk bytes + TUI syntax colors |
-| **invalid** | Small file, parse fails | Raw bytes + error in status |
-
-Scroll position stays **byte-based** so Text/Hex/JSON toggles stay aligned. Key order on disk is preserved in **raw** and **invalid** tiers only.
+Tier **detection** (`SmallPretty`, `Ndjson`, `LargeRaw`, `InvalidRaw`) is implemented in `tiers.rs` for future opt-in formatting. The **interactive TUI always renders on-disk bytes** (M1) so key order and byte offsets match Text and Hex. Invalid small files get a parse-error hint in the status line only.

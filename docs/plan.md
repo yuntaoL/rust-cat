@@ -883,9 +883,9 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 
 **Completed:**
 
-- `rcat-viewers-json/src/tiers.rs`: detect **SmallPretty** (≤ 2 MiB), **Ndjson**, **LargeRaw**, **InvalidRaw**.
-- Per-path `JsonTierCache`; pretty/NDJSON display lines with byte→line mapping for scroll.
-- **Byte anchors** kept for Text/Hex/JSON toggle sync; large/invalid files stay raw on disk (key order preserved).
+- `rcat-viewers-json/src/tiers.rs`: tier **detection** (SmallPretty, Ndjson, LargeRaw, InvalidRaw) for future opt-in.
+- Interactive TUI **always raw bytes** (M1); pretty/NDJSON display reverted after regression (key order + byte sync).
+- **Byte anchors** + `source_byte` = anchor for Text/Hex/JSON toggle sync.
 - Plugin v1 + v2 session share `JsonViewerLogic` cache; status strings name tier (`pretty`, `ndjson`, `raw`, `invalid`).
 - Tests updated for tier expectations; line coverage **~77%** (gate 75%).
 

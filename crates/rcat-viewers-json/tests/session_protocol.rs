@@ -4,20 +4,15 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
-fn write_large_raw_json(path: &std::path::Path) {
-    let mut data = br#"{"z":1,"a":2}"#.to_vec();
-    data.resize(2 * 1024 * 1024 + 1, b'\n');
-    std::fs::write(path, data).unwrap();
-}
-
 #[test]
-fn session_open_render_viewport_raw_tier_preserves_order() {
+fn session_open_render_viewport_preserves_order_and_byte() {
     let plugin = env!("CARGO_BIN_EXE_rcat-viewer-json");
     let dir = tempdir().unwrap();
     let path = dir.path().join("data.json");
-    write_large_raw_json(&path);
+    std::fs::write(&path, br#"{"z":1,"a":2}"#).unwrap();
     let path_str = path.display().to_string();
     let size = std::fs::metadata(&path).unwrap().len();
+    let mid = size / 2;
 
     let mut child = Command::new(plugin)
         .arg("--session")
@@ -37,7 +32,9 @@ fn session_open_render_viewport_raw_tier_preserves_order() {
         "expected open_result, got {open_out}"
     );
 
-    let render = r#"{"type":"render_viewport","start_offset":0,"max_rows":5,"width":120}"#;
+    let render = format!(
+        r#"{{"type":"render_viewport","start_offset":{mid},"max_rows":5,"width":120}}"#
+    );
     writeln!(child.stdin.as_mut().unwrap(), "{render}").unwrap();
     let render_out = read_line(&mut child);
     assert!(
@@ -46,10 +43,10 @@ fn session_open_render_viewport_raw_tier_preserves_order() {
     );
     let z = render_out.find("z").expect("z in output");
     let a = render_out.find("a").expect("a in output");
-    assert!(z < a, "raw tier session render must preserve file order");
+    assert!(z < a, "session render must preserve file order");
     assert!(
-        render_out.contains("raw"),
-        "expected raw tier status in {render_out}"
+        render_out.contains(&format!("\"source_byte\":{mid}")),
+        "expected source_byte={mid} in {render_out}"
     );
 
     writeln!(

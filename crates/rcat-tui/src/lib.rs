@@ -314,6 +314,25 @@ mod tests {
     }
 
     #[test]
+    fn json_viewport_preserves_key_order() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), br#"{"z_last":1,"a_first":2}"#).unwrap();
+        let session = FileSession::open(f.path()).unwrap();
+        let app = App::new(
+            session,
+            vec![Box::new(rcat_viewers_json::JsonViewerLogic::default())],
+            0,
+            0,
+        );
+        let ctx = ViewContext::at_byte(&app.session, 0, 80, 20);
+        let vp = app.viewers[0].render_viewport(&ctx);
+        let joined = vp.lines.join("\n");
+        let z = joined.find("z_last").expect("z_last");
+        let a = joined.find("a_first").expect("a_first");
+        assert!(z < a, "JSON must not reorder keys: {joined}");
+    }
+
+    #[test]
     fn toggle_hex_to_json_preserves_mid_file_position() {
         let f = tempfile::NamedTempFile::new().unwrap();
         write_multi_line_json(f.path());

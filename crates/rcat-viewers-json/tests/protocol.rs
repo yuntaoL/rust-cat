@@ -44,13 +44,11 @@ fn protocol_mode_when_spawned_with_no_subcommand() {
 }
 
 #[test]
-fn render_preserves_file_key_order_in_raw_tier() {
+fn render_preserves_file_key_order() {
     let plugin = env!("CARGO_BIN_EXE_rcat-viewer-json");
 
     let mut f = NamedTempFile::new().unwrap();
-    let mut data = br#"{"z_key":1,"a_key":2}"#.to_vec();
-    data.resize(2 * 1024 * 1024 + 1, b'\n');
-    f.write_all(&data).unwrap();
+    write!(f, r#"{{"z_key":1,"a_key":2}}"#).unwrap();
     let path = f.path().display().to_string();
 
     let request = format!(
