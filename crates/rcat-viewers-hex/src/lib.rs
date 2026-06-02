@@ -1,27 +1,32 @@
 //! Built-in HexViewer.
 //!
 //! Produces classic, correct hex + ASCII output (16 bytes per line with proper padding).
-//! This is the default for binary files and is designed for high visual and data correctness.
+//! Reads exclusively from host mmap slices (no per-frame file reopen).
 
 use std::io::Write;
+use std::sync::Arc;
 
+use rcat_core::backing::{self, FileBacking};
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::FileProbe;
-use rcat_core::session::FileSession;
-use rcat_core::view::{ViewContext, ViewportResult};
+use rcat_core::view::{ViewAnchor, ViewContext, ViewportResult};
 use rcat_core::{FileViewer, ViewerPriority};
 use tracing::trace;
 
-fn hex_lines_from_session(session: &FileSession, start_offset: u64, max_rows: u16) -> Vec<String> {
-    let size = session.size();
-    if size == 0 {
+fn hex_lines_from_bytes(data: &[u8], file_size: u64, start_offset: u64, max_rows: u16) -> Vec<String> {
+    if file_size == 0 || data.is_empty() {
         return vec!["(empty file)".to_string()];
     }
 
-    let start = start_offset.min(size);
-    let bytes_to_read = (max_rows as u64 * 16).min(size.saturating_sub(start)) as usize;
-    let buffer = session.slice(start, bytes_to_read);
+    let start = start_offset.min(file_size);
+    let bytes_to_read = (max_rows as u64 * 16).min(file_size.saturating_sub(start)) as usize;
+    let buffer = if start as usize >= data.len() {
+        &[][..]
+    } else {
+        let end = (start as usize + bytes_to_read).min(data.len());
+        &data[start as usize..end]
+    };
 
     let mut lines = Vec::new();
     for (i, chunk) in buffer.chunks(16).enumerate() {
@@ -60,6 +65,10 @@ fn hex_status(size: u64, pos: u64) -> String {
     format!("Hex  0x{pos:08X} · {pos} / {size} B ({pct}%)", size = size)
 }
 
+fn backing_bytes(info: &FileInfo) -> std::io::Result<Arc<FileBacking>> {
+    backing::backing_for_info(info)
+}
+
 /// The built-in viewer for binary / hex data.
 pub struct HexViewer;
 
@@ -75,10 +84,6 @@ impl FileViewer for HexViewer {
     }
 
     fn can_handle(&self, probe: &mut dyn FileProbe) -> ViewerPriority {
-        // IMPORTANT: The default HexViewer deliberately returns at most `Normal`.
-        // See the documentation on `ViewerPriority` for the reasoning.
-        // Specialized binary viewers (ElfViewer, ImageViewer, ArchiveViewer, etc.)
-        // should return `Preferred` when they have a strong match.
         let prelim = probe.preliminary();
         let prio = match prelim.kind {
             rcat_core::file_info::ContentKind::Binary => ViewerPriority::Normal,
@@ -95,7 +100,6 @@ impl FileViewer for HexViewer {
         writer: &mut dyn Write,
         opts: &DumpOptions,
     ) -> std::io::Result<()> {
-        // Delegate to the proven correct hex implementation in core.
         dump::dump_hex(info, writer, opts)
     }
 
@@ -108,15 +112,15 @@ impl FileViewer for HexViewer {
             "HexViewer::render_viewport"
         );
 
-        let info = ctx.info();
-        let lines = hex_lines_from_session(ctx.session, start_offset, ctx.max_rows);
-        let status = hex_status(info.size, start_offset);
+        let size = ctx.session.size();
+        let lines = hex_lines_from_bytes(ctx.session.bytes(), size, start_offset, ctx.max_rows);
+        let status = hex_status(size, start_offset);
 
         ViewportResult {
             lines,
             status,
             anchor,
-            source_byte: Some(start_offset.min(info.size.saturating_sub(1))),
+            source_byte: Some(start_offset.min(size.saturating_sub(1))),
         }
     }
 
@@ -132,12 +136,24 @@ impl FileViewer for HexViewer {
             rows = max_rows,
             "HexViewer::render_lines"
         );
+        match backing_bytes(info) {
+            Ok(b) => hex_lines_from_bytes(b.bytes(), b.size(), start_offset, max_rows),
+            Err(_) => vec!["(error opening file)".to_string()],
+        }
+    }
 
-        let session = match rcat_core::FileSession::from_info(info.clone()) {
-            Ok(s) => s,
-            Err(_) => return vec!["(error opening file)".to_string()],
+    fn advance_anchor(&self, ctx: &ViewContext, delta: i64) -> ViewAnchor {
+        let step: u64 = 16;
+        let size = ctx.session.size();
+        let current = ctx.anchor_raw();
+        let raw = if delta >= 0 {
+            current
+                .saturating_add((delta as u64) * step)
+                .min(size.saturating_sub(1))
+        } else {
+            current.saturating_sub(((-delta) as u64) * step)
         };
-        hex_lines_from_session(&session, start_offset, max_rows)
+        ViewAnchor::Byte(raw)
     }
 
     fn advance_lines(&self, info: &FileInfo, current: u64, delta: i64, _width: u16) -> u64 {
@@ -160,6 +176,8 @@ impl FileViewer for HexViewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcat_core::session::FileSession;
+    use rcat_core::view::ViewContext;
     use tempfile::NamedTempFile;
 
     fn write_temp(content: &[u8]) -> NamedTempFile {
@@ -176,13 +194,11 @@ mod tests {
         let mut probe = rcat_core::probe::FileProbeWithInfo::new(&info, prefix);
 
         let viewer = HexViewer;
-        // Default HexViewer is intentionally conservative (max Normal)
         assert_eq!(viewer.can_handle(&mut probe), ViewerPriority::Normal);
     }
 
     #[test]
     fn hex_viewer_produces_correct_padded_output() {
-        // 17 bytes -> 2 lines, second line has proper padding
         let data: Vec<u8> = (0u8..=16).collect();
         let f = write_temp(&data);
         let info = FileInfo::from_path(f.path()).unwrap();
@@ -195,29 +211,35 @@ mod tests {
 
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s.lines().count(), 2);
-        // Last line should contain the final byte and have padding
         assert!(s.contains("10"));
         assert!(s.contains("|."));
     }
 
     #[test]
-    fn hex_render_lines_and_advance_work() {
+    fn hex_render_viewport_uses_session_slice() {
+        let data: Vec<u8> = (0u8..=100).collect();
+        let f = write_temp(&data);
+        let session = FileSession::open(f.path()).unwrap();
+        let viewer = HexViewer;
+        let ctx = ViewContext::at_byte(&session, 16, 80, 3);
+        let vp = viewer.render_viewport(&ctx);
+        assert_eq!(vp.lines.len(), 3);
+        assert!(vp.lines[0].starts_with("00000010:"));
+        assert!(vp.status.contains("Hex"));
+    }
+
+    #[test]
+    fn hex_render_lines_uses_backing_once() {
         let data: Vec<u8> = (0u8..=100).collect();
         let f = write_temp(&data);
         let info = FileInfo::from_path(f.path()).unwrap();
-        let session = rcat_core::FileSession::from_info(info).unwrap();
+        let session = FileSession::from_info(info).unwrap();
 
         let viewer = HexViewer;
-
         let lines = viewer.render_lines(session.info(), 0, 5, 80);
         assert_eq!(lines.len(), 5);
 
         let pos = viewer.advance_lines(session.info(), 0, 3, 80);
-        assert_eq!(pos, 48); // 3 rows * 16 bytes
-
-        let ctx = rcat_core::ViewContext::at_byte(&session, 0, 80, 5);
-        let vp = viewer.render_viewport(&ctx);
-        assert_eq!(vp.lines.len(), 5);
-        assert!(vp.status.contains("Hex"));
+        assert_eq!(pos, 48);
     }
 }

@@ -19,6 +19,7 @@ pub mod view;
 pub mod viewer;
 pub mod viewer_registry;
 
+pub use backing::{backing_for_info, FileBacking};
 pub use file_info::FileInfo;
 pub use probe::{DETECTION_READ_LIMIT, FileProbe, FileProbeWithInfo, PrefixProbe};
 pub use scroll::{anchor_from_fraction, parse_display_line_extent_from_status, scroll_fraction};

@@ -7,7 +7,7 @@
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
 **Date**: 2026-06-02 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR3 done** (session, viewport cache, protocol v2). **Next: PR4** (Text/Hex session-only I/O). JSON interactive view is raw+highlight; **PR5** adds optional streaming pretty-print tiers.
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR4 done**. **Next: PR5** (JSON streaming tiers). JSON interactive view is raw+highlight on mmap-backed text rendering.
 
 ## Quick Navigation
 
@@ -666,15 +666,14 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 | **M1** | Viewer correctness + test baseline | **Done** | `2178c3d`+ — raw JSON, byte sync across viewers, path-based JSON selection, 75% coverage gate |
 | **PR2** | Dirty TUI redraw + viewport cache | **Done** | `needs_redraw` + `ViewportCache` key `(viewer, anchor, width, rows)`; idle poll skips draw/render |
 | **PR3** | Protocol v2 skeleton + session subprocess | **Done** | `PluginSession`, `--session`, `Open`/`ReadBytes`/`RenderViewport`/`Close`; `docs/plugins.md` |
-| **PR4** | Text + Hex on session only | **Next** | Text: stop re-`open` per frame; shared `LineIndex` (host) |
-| **PR5** | JSON plugin tiers + ambitious streaming | Pending | See JSON strategy below |
+| **PR4** | Text + Hex on session only | **Done** | `text_slice` over mmap; `render_viewport` / `advance_anchor` use `FileSession` bytes |
+| **PR5** | JSON plugin tiers + ambitious streaming | **Next** | See JSON strategy below |
 
-### Known gaps (pre-PR4)
+### Known gaps (pre-PR5)
 
 | Area | Issue |
 |------|--------|
-| Text viewer | Re-opens file; does not use `FileSession` slice API |
-| Built-in viewers | In-process; external plugins use v2 session when `protocol_version: 2` |
+| Line index | No shared host `LineIndex` yet (text scans slice per operation; good enough for v0.1) |
 | JSON pretty-print | Deferred to PR5; interactive path is raw file + syntax colors (M1) |
 
 ### JSON strategy (product decision 2026-06-01)
@@ -865,7 +864,18 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 - Tests: `session_protocol.rs`, `supports_protocol_v2` unit test.
 - `docs/plugins.md` rewritten for v1 + v2.
 
-**Next:** **PR4** — Text/Hex use `FileSession` slices only (no per-frame re-open).
+---
+
+### 2026-06-02 — PR4: Text + Hex session-only I/O
+
+**Completed:**
+
+- `rcat-viewers-text/src/text_slice.rs`: render, scroll, and wrap on `&[u8]` from host mmap.
+- `TextViewer::render_viewport` / `advance_anchor` use `ViewContext.session` directly.
+- `HexViewer`: `hex_lines_from_bytes`; `render_lines` uses `backing_for_info` once (no `FileSession::from_info` per call).
+- `JsonViewerLogic`: TUI path uses `text_slice` + session bytes (inherits PR4 behavior).
+
+**Next:** **PR5** — JSON streaming / tiered pretty-print.
 
 ---
 
@@ -890,8 +900,8 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 | — | **M1** — Viewer correctness + 75% coverage | **Done** |
 | — | **PR2** — Dirty TUI redraw + viewport cache | **Done** |
 | — | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Done** |
-| 1 | **PR4** — Text/Hex session-only I/O + line index | **Next** |
-| 4 | **PR5** — JSON ambitious streaming + tier fallbacks | Pending |
+| — | **PR4** — Text/Hex session-only I/O | **Done** |
+| 1 | **PR5** — JSON ambitious streaming + tier fallbacks | **Next** |
 | 5 | v0.1 release checklist (large-file manual tests, README) | After PR5 |
 
 **Phase 4 (UX) — mostly done:**

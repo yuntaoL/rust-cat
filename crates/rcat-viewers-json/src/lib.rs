@@ -9,7 +9,7 @@ use std::io::Write;
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::FileProbe;
-use rcat_core::view::{PositionKind, ViewContext, ViewportResult};
+use rcat_core::view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
 use rcat_core::viewer::{FileViewer, ViewerPriority};
 use rcat_viewers_text::TextViewer;
 
@@ -53,14 +53,34 @@ impl FileViewer for JsonViewerLogic {
     fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
         let anchor = ctx.anchor;
         let raw = ctx.anchor_raw();
-        let lines = self.render_lines(ctx.info(), raw, ctx.max_rows, ctx.content_width);
-        let status = self.status(ctx.info(), raw);
+        let data = ctx.session.bytes();
+        let size = ctx.session.size();
+        let lines =
+            rcat_viewers_text::text_slice::render_display_rows(
+                data,
+                size,
+                raw,
+                ctx.max_rows,
+                ctx.content_width,
+            );
+        let status = Self::status_byte(ctx.info(), raw);
         ViewportResult {
             lines,
             status,
             anchor,
-            source_byte: Some(raw.min(ctx.session.size().saturating_sub(1))),
+            source_byte: Some(raw.min(size.saturating_sub(1))),
         }
+    }
+
+    fn advance_anchor(&self, ctx: &ViewContext, delta: i64) -> ViewAnchor {
+        let raw = rcat_viewers_text::text_slice::advance_lines_bytes(
+            ctx.session.bytes(),
+            ctx.session.size(),
+            ctx.anchor_raw(),
+            delta,
+            ctx.content_width,
+        );
+        ViewAnchor::Byte(raw)
     }
 
     fn render_lines(
