@@ -577,7 +577,7 @@ impl App {
             }
             rcat_core::PositionKind::DisplayLine => viewer
                 .display_line_for_byte(info, byte)
-                .map(|line| ViewAnchor::DisplayLine(line))
+                .map(ViewAnchor::DisplayLine)
                 .unwrap_or_else(|| {
                     let extent = viewer.scroll_extent(info);
                     ViewAnchor::DisplayLine(rcat_core::anchor_from_fraction(

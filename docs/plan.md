@@ -6,8 +6,8 @@
 
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
-**Date**: 2026-06-01 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete** (theming, help, metadata sidebar, hex/json styling, panic-safe terminal). Phase 5 foundation **complete** (plugin protocol v1, config, stdin spool, completions, `FileBacking` mmap). **Blocking v0.1 work** is now the **Unified Session & Large-File track** (PR1–PR5 below): one host memory model and one data path for built-in and plugin viewers. **PR1 done** (`FileSession`, `ViewContext`, `render_viewport`). **Next: PR2** (dirty TUI redraw + viewport cache). JSON strategy: **ambitious streaming pretty-print first**, with tiered fallback if needed.
+**Date**: 2026-06-02 (last major update)  
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **Milestone M1 complete** (2026-06-02): byte-synced Text/Hex/JSON, raw JSON view (no reformat), `.json` auto-selects JSON viewer, **75% line coverage** enforced in CI. **PR1 done**. **Next: PR2** (dirty TUI redraw + viewport cache). JSON **interactive** view is raw+highlight today; **PR5** adds optional streaming pretty-print tiers.
 
 ## Quick Navigation
 
@@ -662,7 +662,8 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 
 | PR | Title | Status | Commit / notes |
 |----|--------|--------|----------------|
-| **PR1** | `FileSession` + `ViewContext` + `render_viewport` | **Done** | `90705e6` — `session.rs`, `view.rs`; Hex via `session.slice()`; TUI uses `ViewportResult`; JSON plugin declares `position_kind: display_line` |
+| **PR1** | `FileSession` + `ViewContext` + `render_viewport` | **Done** | `90705e6` — `session.rs`, `view.rs`; Hex via `session.slice()`; TUI uses `ViewportResult` |
+| **M1** | Viewer correctness + test baseline | **Done** | `2178c3d`+ — raw JSON, byte sync across viewers, path-based JSON selection, 75% coverage gate |
 | **PR2** | Dirty TUI redraw + viewport cache | **Next** | Stop ~20 plugin spawns/sec on idle; cache `(viewer, anchor, width, height)` |
 | **PR3** | Protocol v2 skeleton + session subprocess | Pending | `Open` → `ReadBytes` / `RenderViewport` → `Close`; document in `docs/plugins.md` |
 | **PR4** | Text + Hex on session only | Pending | Text: stop re-`open` per frame; shared `LineIndex` (host) |
@@ -672,11 +673,10 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 
 | Area | Issue |
 |------|--------|
-| TUI loop | Redraws every ~50 ms; calls `render_viewport` every frame |
-| JSON plugin | `read_to_end` + full `serde_json::Value` + pretty on every `render_lines` |
+| TUI loop | Redraws every ~50 ms; calls `render_viewport` every frame (no dirty cache yet) |
 | Text viewer | Re-opens file; does not use `FileSession` slice API |
 | Plugins | One-shot subprocess per request; `ReadBytes` unused |
-| Offset on viewer toggle | Raw anchor preserved; byte ↔ line not converted |
+| JSON pretty-print | Deferred to PR5; interactive path is raw file + syntax colors (M1) |
 
 ### JSON strategy (product decision 2026-06-01)
 
@@ -821,6 +821,29 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 
 ---
 
+### 2026-06-02 — Milestone M1: Viewer correctness & test baseline
+
+**Milestone tag:** `milestone-m1-viewer-correctness` (push to `main` after this commit)
+
+**Completed:**
+
+- **JSON default viewer:** `.json` paths enrich `PreliminaryDetection` from extension; `find_best` selects JSON over Text.
+- **Raw JSON view:** In-process `JsonViewerLogic` delegates to `TextViewer` (byte-anchored); TUI applies JSON styling; no `serde_json` pretty reformat (preserves key order and offsets).
+- **Cross-viewer sync:** Text ↔ Hex ↔ JSON share byte positions; footer/status aligned.
+- **Tests:** Viewer selection, external plugin protocol, `ViewContext`, offset parsing, stdin spool, expanded protocol/status/advance coverage.
+- **Quality gate:** CI + `just coverage-check` enforce **≥ 75%** line coverage (`cargo llvm-cov`).
+
+**Commits on this milestone (newest first):**
+
+- JSON raw view + sync fixes (`2178c3d`, `b782f5c`)
+- Plan/docs PR track (`4fde307`)
+- PR1 session/viewport (`90705e6`)
+- This commit: default JSON selection, 75% threshold, test expansion
+
+**Next step:** **PR2** — dirty-flag TUI redraw and viewport cache so idle frames do not respawn plugins or re-render unchanged viewports.
+
+---
+
 ## Note on This Document
 
 This file (`docs/plan.md`) **inside the repository** is the official plan that travels with the codebase.
@@ -833,12 +856,13 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 
 ---
 
-## Current Work (2026-06-01) — pick up here
+## Current Work (2026-06-02) — pick up here
 
-**Active track:** [Section 15 — PR1–PR5](#15-execution-track-unified-session--large-files-pr1pr5)
+**Milestone M1:** complete. **Active track:** [Section 15 — PR1–PR5](#15-execution-track-unified-session--large-files-pr1pr5)
 
 | Priority | Task | Status |
 |----------|------|--------|
+| — | **M1** — Viewer correctness + 75% coverage | **Done** |
 | 1 | **PR2** — Dirty TUI redraw + viewport cache | **Next** |
 | 2 | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | Pending |
 | 3 | **PR4** — Text/Hex session-only I/O + line index | Pending |

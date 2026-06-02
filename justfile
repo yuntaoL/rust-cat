@@ -48,7 +48,7 @@ doc:
 # Uses cargo-llvm-cov (modern, accurate, and well-supported)
 
 # Minimum line coverage threshold (update this when we raise the bar)
-COVERAGE_THRESHOLD := "50"
+COVERAGE_THRESHOLD := "75"
 
 # Generate an HTML coverage report locally
 coverage:
@@ -60,7 +60,7 @@ coverage:
 
 # Run coverage and fail if line coverage is below the threshold.
 # Intended for use in CI / release checks.
-# Current threshold: 50% (we plan to increase this to 75% later)
+# Current threshold: 75% line coverage (see COVERAGE_THRESHOLD)
 coverage-check:
     cargo install cargo-llvm-cov --locked
     cargo llvm-cov --workspace --all-features --fail-under-lines {{COVERAGE_THRESHOLD}}

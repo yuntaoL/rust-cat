@@ -516,6 +516,16 @@ mod tests {
     }
 
     #[test]
+    fn render_lines_empty_file_shows_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        std::fs::write(&path, b"").unwrap();
+        let info = FileInfo::from_path(&path).unwrap();
+        let lines = TextViewer.render_lines(&info, 0, 5, 80);
+        assert_eq!(lines, vec!["(empty file)".to_string()]);
+    }
+
+    #[test]
     fn text_viewer_prefers_text_files() {
         let f = write_temp(b"hello world\n");
         let info = FileInfo::from_path(f.path()).unwrap();

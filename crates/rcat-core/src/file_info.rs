@@ -62,7 +62,8 @@ impl FileInfo {
             .map(|s| s.to_ascii_lowercase());
 
         // Use the new infer-based first-pass detection
-        let detected = crate::detection::detect_file(&path, size)?;
+        let mut detected = crate::detection::detect_file(&path, size)?;
+        crate::detection::enrich_detection_from_path(&mut detected, extension.as_deref());
 
         let type_description = detected
             .format
@@ -96,5 +97,24 @@ impl FileInfo {
     /// Returns true if this file should be treated as text by default.
     pub fn is_text(&self) -> bool {
         matches!(self.kind, ContentKind::Text | ContentKind::Empty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_path_enriches_detected_extension_for_viewer_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, br#"{"a":1}"#).unwrap();
+        let info = FileInfo::from_path(&path).unwrap();
+        assert_eq!(info.extension.as_deref(), Some("json"));
+        assert_eq!(info.detected.extension.as_deref(), Some("json"));
+        assert_eq!(
+            info.detected.mime_type.as_deref(),
+            Some("application/json")
+        );
     }
 }

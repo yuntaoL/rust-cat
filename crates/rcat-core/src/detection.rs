@@ -23,6 +23,34 @@ pub struct PreliminaryDetection {
     pub kind: ContentKind,
 }
 
+/// Guess MIME type from a path extension when magic detection did not provide one.
+pub fn mime_guess_from_extension(ext: &str) -> Option<String> {
+    match ext {
+        "json" => Some("application/json".to_string()),
+        "xml" => Some("application/xml".to_string()),
+        "yaml" | "yml" => Some("application/yaml".to_string()),
+        "md" | "markdown" => Some("text/markdown".to_string()),
+        "txt" => Some("text/plain".to_string()),
+        _ => None,
+    }
+}
+
+/// Fill gaps in magic-based detection using the path extension (e.g. `.json` without magic).
+pub fn enrich_detection_from_path(
+    detected: &mut PreliminaryDetection,
+    path_extension: Option<&str>,
+) {
+    let Some(ext) = path_extension else {
+        return;
+    };
+    if detected.extension.is_none() {
+        detected.extension = Some(ext.to_string());
+    }
+    if detected.mime_type.is_none() {
+        detected.mime_type = mime_guess_from_extension(ext);
+    }
+}
+
 /// Perform first-pass detection using `infer` (magic bytes) + fallback heuristics.
 pub fn detect_file(path: &Path, size: u64) -> std::io::Result<PreliminaryDetection> {
     if size == 0 {
@@ -127,6 +155,30 @@ mod tests {
 
         let det = detect_file(&path, 0).unwrap();
         assert_eq!(det.kind, ContentKind::Empty);
+    }
+
+    #[test]
+    fn enrich_sets_json_extension_and_mime_when_magic_missing() {
+        let mut det = PreliminaryDetection {
+            kind: ContentKind::Text,
+            ..Default::default()
+        };
+        enrich_detection_from_path(&mut det, Some("json"));
+        assert_eq!(det.extension.as_deref(), Some("json"));
+        assert_eq!(det.mime_type.as_deref(), Some("application/json"));
+    }
+
+    #[test]
+    fn enrich_does_not_override_existing_magic_detection() {
+        let mut det = PreliminaryDetection {
+            mime_type: Some("application/octet-stream".to_string()),
+            extension: Some("bin".to_string()),
+            kind: ContentKind::Binary,
+            ..Default::default()
+        };
+        enrich_detection_from_path(&mut det, Some("json"));
+        assert_eq!(det.extension.as_deref(), Some("bin"));
+        assert_eq!(det.mime_type.as_deref(), Some("application/octet-stream"));
     }
 
     #[test]

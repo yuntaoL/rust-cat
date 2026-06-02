@@ -40,7 +40,7 @@ We use `cargo-llvm-cov` for coverage reporting.
 just coverage          # Generates HTML report in target/llvm-cov/html/
 ```
 
-In CI we enforce a minimum line coverage (currently **50%**, planned to increase to **75%**).
+In CI we enforce a minimum line coverage of **75%** (see `COVERAGE_THRESHOLD` in `justfile`).
 
 To run the CI-style check locally:
 

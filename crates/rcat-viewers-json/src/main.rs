@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rcat_core::FileViewer;
 use rcat_core::dump::DumpOptions;

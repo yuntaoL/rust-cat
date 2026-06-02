@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let offset = parse_offset(&cli.offset)?;
+    let offset = rcat_cli::offset::parse_offset(&cli.offset)?;
     let mode = if cli.hex {
         ViewMode::Hex
     } else if cli.text {
@@ -359,11 +359,4 @@ fn init_logging(verbose: u8, log_file: Option<PathBuf>) {
     tracing::debug!(verbose, log_file = ?log_file, "logging initialized");
 }
 
-fn parse_offset(s: &str) -> anyhow::Result<u64> {
-    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).map_err(|e| anyhow::anyhow!("invalid hex offset: {e}"))
-    } else {
-        s.parse::<u64>()
-            .map_err(|e| anyhow::anyhow!("invalid offset: {e}"))
-    }
-}
+

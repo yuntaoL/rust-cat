@@ -135,4 +135,15 @@ mod tests {
         let line = style_json_line("  {", &theme);
         assert!(!line.spans.is_empty());
     }
+
+    #[test]
+    fn json_key_value_line_splits_key_and_value_spans() {
+        let theme = Theme::default();
+        let line = style_json_line(r#"  "name": 42,"#, &theme);
+        assert!(
+            line.spans.len() >= 2,
+            "expected separate key/value spans, got {}",
+            line.spans.len()
+        );
+    }
 }

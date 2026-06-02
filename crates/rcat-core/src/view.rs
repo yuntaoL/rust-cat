@@ -115,3 +115,34 @@ impl ViewportResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::FileSession;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn view_anchor_round_trip() {
+        let anchor = ViewAnchor::from_raw(PositionKind::Byte, 42);
+        assert_eq!(anchor.kind(), PositionKind::Byte);
+        assert_eq!(anchor.raw(), 42);
+    }
+
+    #[test]
+    fn view_context_at_byte_exposes_session_info() {
+        let mut f = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello").unwrap();
+        let session = FileSession::open(f.path()).unwrap();
+        let ctx = ViewContext::at_byte(&session, 0, 80, 10);
+        assert_eq!(ctx.anchor_raw(), 0);
+        assert_eq!(ctx.info().size, 5);
+    }
+
+    #[test]
+    fn viewport_result_empty_placeholder() {
+        let r = ViewportResult::empty_placeholder("Test", ViewAnchor::Byte(0));
+        assert!(r.lines[0].contains("Test"));
+        assert_eq!(r.source_byte, None);
+    }
+}

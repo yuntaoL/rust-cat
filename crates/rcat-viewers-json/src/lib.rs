@@ -9,7 +9,7 @@ use std::io::Write;
 use rcat_core::dump::{self, DumpOptions};
 use rcat_core::file_info::FileInfo;
 use rcat_core::probe::FileProbe;
-use rcat_core::view::{PositionKind, ViewAnchor, ViewContext, ViewportResult};
+use rcat_core::view::{PositionKind, ViewContext, ViewportResult};
 use rcat_core::viewer::{FileViewer, ViewerPriority};
 use rcat_viewers_text::TextViewer;
 
@@ -115,9 +115,39 @@ mod tests {
     }
 
     #[test]
+    fn can_handle_prefers_json_extension_from_probe() {
+        use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        std::fs::write(&path, br#"{"k":1}"#).unwrap();
+        let info = FileInfo::from_path(&path).unwrap();
+        let prefix = PrefixProbe::from_path(&path).unwrap();
+        let mut probe = FileProbeWithInfo::new(&info, prefix);
+        let logic = JsonViewerLogic;
+        assert_eq!(logic.can_handle(&mut probe), ViewerPriority::Preferred);
+    }
+
+    #[test]
     fn uses_byte_position_kind() {
         let logic = JsonViewerLogic;
         assert_eq!(logic.position_kind(), PositionKind::Byte);
+    }
+
+    #[test]
+    fn render_viewport_preserves_raw_bytes() {
+        use rcat_core::session::FileSession;
+        use rcat_core::view::ViewContext;
+
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, r#"{{"only":true}}"#).unwrap();
+        let session = FileSession::open(f.path()).unwrap();
+        let logic = JsonViewerLogic;
+        let ctx = ViewContext::at_byte(&session, 0, 80, 5);
+        let vp = logic.render_viewport(&ctx);
+        assert!(vp.lines.iter().any(|l| l.contains("only")));
+        assert!(vp.status.starts_with("JSON  "));
+        assert_eq!(vp.source_byte, Some(0));
     }
 
     #[test]
