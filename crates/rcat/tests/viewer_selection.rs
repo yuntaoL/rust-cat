@@ -14,7 +14,7 @@ fn builtin_registry() -> ViewerRegistry {
     let mut registry = ViewerRegistry::new();
     registry.register(Box::new(TextViewer));
     registry.register(Box::new(HexViewer));
-    registry.register(Box::new(JsonViewerLogic));
+    registry.register(Box::new(JsonViewerLogic::default()));
     registry
 }
 

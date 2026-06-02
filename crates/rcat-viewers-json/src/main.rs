@@ -72,7 +72,7 @@ fn main() {
 fn print_usage_and_exit() -> ! {
     eprintln!("rcat-viewer-json — JSON viewer plugin for rcat");
     eprintln!();
-    eprintln!("Shows the file as raw bytes with JSON syntax highlighting (no reformat).");
+    eprintln!("Tiered JSON view: pretty (small), NDJSON lines, or raw fallback (large/invalid).");
     eprintln!();
     eprintln!("  rcat-viewer-json --plugin-info");
     eprintln!("  rcat-viewer-json --session     # protocol v2 (stdin/stdout loop)");
@@ -154,7 +154,7 @@ fn print_plugin_info() {
 
 fn handle_dump(path: &str, opts: &DumpOptions) -> io::Result<()> {
     let info = FileInfo::from_path(path)?;
-    let viewer = JsonViewerLogic;
+    let viewer = JsonViewerLogic::default();
     let mut stdout = io::stdout();
     viewer.dump(&info, &mut stdout, opts)
 }
@@ -180,7 +180,7 @@ fn run_protocol_once() -> io::Result<()> {
 }
 
 fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
-    let logic = JsonViewerLogic;
+    let logic = JsonViewerLogic::default();
 
     Ok(match request {
         PluginRequest::CanHandle {

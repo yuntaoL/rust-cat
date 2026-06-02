@@ -195,7 +195,7 @@ fn build_registry(app_config: &rcat_cli::config::RcatConfig) -> anyhow::Result<V
     let mut registry = ViewerRegistry::new();
     registry.register(Box::new(TextViewer));
     registry.register(Box::new(HexViewer));
-    registry.register(Box::new(JsonViewerLogic));
+    registry.register(Box::new(JsonViewerLogic::default()));
 
     let search_paths = rcat_cli::plugin_discovery::plugin_search_paths();
     let discovered = rcat_cli::plugin_discovery::discover_plugins(&search_paths);

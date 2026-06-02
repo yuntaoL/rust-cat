@@ -297,7 +297,7 @@ mod tests {
             session,
             vec![
                 Box::new(rcat_viewers_text::TextViewer),
-                Box::new(rcat_viewers_json::JsonViewerLogic),
+                Box::new(rcat_viewers_json::JsonViewerLogic::default()),
             ],
             0,
             mid_byte,
@@ -325,7 +325,7 @@ mod tests {
             session,
             vec![
                 Box::new(rcat_viewers_hex::HexViewer),
-                Box::new(rcat_viewers_json::JsonViewerLogic),
+                Box::new(rcat_viewers_json::JsonViewerLogic::default()),
             ],
             0,
             mid_byte,

@@ -7,7 +7,7 @@
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
 **Date**: 2026-06-02 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR4 done**. **Next: PR5** (JSON streaming tiers). JSON interactive view is raw+highlight on mmap-backed text rendering.
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done**. **PR1–PR5 done** (execution track). JSON viewer uses tiered pretty / NDJSON / raw fallback; byte-anchored scroll across viewers.
 
 ## Quick Navigation
 
@@ -31,7 +31,7 @@
 | 3     | Second viewer + unified navigation + polish                | **Complete**           | Text + Hex + JSON viewers; good paging/scrolling |
 | 4     | UX polish + viewer quality                                 | **Largely complete**   | Theming, `?` help, `m` metadata, hex/json styling, panic hook |
 | 5     | Extensibility hooks (plugins + logging), config, stdin     | **Foundation complete**| Protocol v1, discovery, timeouts, `~/.config/rcat/config.toml`, completions |
-| **M** | **Memory model + protocol v2 (PR1–PR5)** — **blocks v0.1** | **In progress (PR1 done)** | See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) |
+| **M** | **Memory model + protocol v2 (PR1–PR5)** — **blocks v0.1** | **Complete** | See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) |
 
 **Total for v0.1**: Original 3–5 week estimate; remaining work is mostly Phase **M** + release checklist.
 
@@ -667,14 +667,14 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 | **PR2** | Dirty TUI redraw + viewport cache | **Done** | `needs_redraw` + `ViewportCache` key `(viewer, anchor, width, rows)`; idle poll skips draw/render |
 | **PR3** | Protocol v2 skeleton + session subprocess | **Done** | `PluginSession`, `--session`, `Open`/`ReadBytes`/`RenderViewport`/`Close`; `docs/plugins.md` |
 | **PR4** | Text + Hex on session only | **Done** | `text_slice` over mmap; `render_viewport` / `advance_anchor` use `FileSession` bytes |
-| **PR5** | JSON plugin tiers + ambitious streaming | **Next** | See JSON strategy below |
+| **PR5** | JSON plugin tiers + pretty/NDJSON/raw fallback | **Done** | `tiers.rs`, per-path cache, byte anchors preserved |
 
-### Known gaps (pre-PR5)
+### Known gaps (post-PR5)
 
 | Area | Issue |
 |------|--------|
 | Line index | No shared host `LineIndex` yet (text scans slice per operation; good enough for v0.1) |
-| JSON pretty-print | Deferred to PR5; interactive path is raw file + syntax colors (M1) |
+| JSON streaming pretty | Incremental/streaming formatter not yet implemented; small files use full `serde_json` pretty cache |
 
 ### JSON strategy (product decision 2026-06-01)
 
@@ -875,7 +875,19 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 - `HexViewer`: `hex_lines_from_bytes`; `render_lines` uses `backing_for_info` once (no `FileSession::from_info` per call).
 - `JsonViewerLogic`: TUI path uses `text_slice` + session bytes (inherits PR4 behavior).
 
-**Next:** **PR5** — JSON streaming / tiered pretty-print.
+**Next:** v0.1 release checklist (large-file manual tests, README).
+
+---
+
+### 2026-06-02 — PR5: JSON tiered viewing
+
+**Completed:**
+
+- `rcat-viewers-json/src/tiers.rs`: detect **SmallPretty** (≤ 2 MiB), **Ndjson**, **LargeRaw**, **InvalidRaw**.
+- Per-path `JsonTierCache`; pretty/NDJSON display lines with byte→line mapping for scroll.
+- **Byte anchors** kept for Text/Hex/JSON toggle sync; large/invalid files stay raw on disk (key order preserved).
+- Plugin v1 + v2 session share `JsonViewerLogic` cache; status strings name tier (`pretty`, `ndjson`, `raw`, `invalid`).
+- Tests updated for tier expectations; line coverage **~77%** (gate 75%).
 
 ---
 
@@ -901,8 +913,8 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 | — | **PR2** — Dirty TUI redraw + viewport cache | **Done** |
 | — | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Done** |
 | — | **PR4** — Text/Hex session-only I/O | **Done** |
-| 1 | **PR5** — JSON ambitious streaming + tier fallbacks | **Next** |
-| 5 | v0.1 release checklist (large-file manual tests, README) | After PR5 |
+| — | **PR5** — JSON tiered pretty / NDJSON / raw fallback | **Done** |
+| 1 | v0.1 release checklist (large-file manual tests, README) | **Next** |
 
 **Phase 4 (UX) — mostly done:**
 

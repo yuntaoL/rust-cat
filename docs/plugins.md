@@ -97,6 +97,17 @@ Example (JSON plugin):
 
 ## Reference implementation
 
-- Library: `crates/rcat-viewers-json` (`JsonViewerLogic`)
+- Library: `crates/rcat-viewers-json` (`JsonViewerLogic` + `tiers.rs`)
 - Plugin binary: `rcat-viewer-json` (`--plugin-info`, `--session`, v1 stdin mode)
 - Host session driver: `crates/rcat-core/src/plugin_session.rs`
+
+### JSON tiers (PR5)
+
+| Tier | When | Display |
+|------|------|---------|
+| **pretty** | ≤ 2 MiB, valid single JSON | `serde_json` pretty lines (cached) |
+| **ndjson** | ≥ 2 non-empty lines, each valid JSON | Per-source-line pretty |
+| **raw** | > 2 MiB | On-disk bytes + TUI syntax colors |
+| **invalid** | Small file, parse fails | Raw bytes + error in status |
+
+Scroll position stays **byte-based** so Text/Hex/JSON toggles stay aligned. Key order on disk is preserved in **raw** and **invalid** tiers only.

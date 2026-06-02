@@ -16,13 +16,15 @@ pub struct PluginSessionState {
     pub info: FileInfo,
     /// Bytes supplied by the host via `ReadBytes` (extends beyond `initial_data` in Open).
     pub host_bytes: Vec<u8>,
+    pub viewer: JsonViewerLogic,
 }
 
 pub fn handle_session_request(
     state: &mut Option<PluginSessionState>,
     request: &PluginRequest,
 ) -> io::Result<PluginResponse> {
-    let logic = JsonViewerLogic;
+    let fallback = JsonViewerLogic::default();
+    let logic = state.as_ref().map(|s| &s.viewer).unwrap_or(&fallback);
 
     Ok(match request {
         PluginRequest::Open {
@@ -36,6 +38,7 @@ pub fn handle_session_request(
                 file_path: PathBuf::from(file_path),
                 info,
                 host_bytes: initial_data.clone(),
+                viewer: JsonViewerLogic::default(),
             });
             PluginResponse::OpenResult
         }

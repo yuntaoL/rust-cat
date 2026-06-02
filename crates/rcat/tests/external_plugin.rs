@@ -47,21 +47,36 @@ fn external_json_plugin_render_and_dump() {
         return;
     };
 
-    let mut f = NamedTempFile::new().unwrap();
-    write!(f, r#"{{"z":1,"a":2}}"#).unwrap();
-    let info = FileInfo::from_path(f.path()).unwrap();
     let viewer = ExternalPluginViewer::with_timeout(plugin, Duration::from_secs(5)).unwrap();
 
-    let lines = viewer.render_lines(&info, 0, 5, 120);
-    let joined = lines.join("\n");
-    let z = joined.find("z").expect("z_key fragment in output");
-    let a = joined.find("a").expect("a_key fragment in output");
-    assert!(z < a, "plugin render must preserve file order: {joined}");
+    // Small file → pretty tier (formatted output, not necessarily key order).
+    let mut small = NamedTempFile::new().unwrap();
+    write!(small, r#"{{"z":1,"a":2}}"#).unwrap();
+    let small_info = FileInfo::from_path(small.path()).unwrap();
+    let pretty_lines = viewer.render_lines(&small_info, 0, 8, 120);
+    let pretty_joined = pretty_lines.join("\n");
+    assert!(pretty_joined.contains("z") && pretty_joined.contains("a"));
+    let pretty_status = viewer.status(&small_info, 0);
+    assert!(pretty_status.contains("pretty"));
+
+    // Large file → raw tier (preserves on-disk key order).
+    let mut large = NamedTempFile::new().unwrap();
+    let mut data = br#"{"z":1,"a":2}"#.to_vec();
+    data.resize(2 * 1024 * 1024 + 1, b'\n');
+    large.write_all(&data).unwrap();
+    let large_info = FileInfo::from_path(large.path()).unwrap();
+    let raw_lines = viewer.render_lines(&large_info, 0, 5, 120);
+    let raw_joined = raw_lines.join("\n");
+    let z = raw_joined.find("z").expect("z in raw output");
+    let a = raw_joined.find("a").expect("a in raw output");
+    assert!(z < a, "raw tier must preserve file order: {raw_joined}");
+    let raw_status = viewer.status(&large_info, 0);
+    assert!(raw_status.contains("raw"));
 
     let mut buf = Vec::new();
     viewer
         .dump(
-            &info,
+            &small_info,
             &mut buf,
             &DumpOptions {
                 offset: 0,
@@ -72,9 +87,7 @@ fn external_json_plugin_render_and_dump() {
     let out = String::from_utf8(buf).unwrap();
     assert!(out.contains("z"));
 
-    let status = viewer.status(&info, 0);
-    assert!(status.contains("JSON"));
-    let advanced = viewer.advance_lines(&info, 0, 1, 80);
+    let advanced = viewer.advance_lines(&small_info, 0, 1, 80);
     assert!(advanced > 0);
 }
 
