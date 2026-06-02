@@ -67,6 +67,15 @@ pub trait FileViewer: Send + Sync {
         PositionKind::Byte
     }
 
+    /// Largest meaningful anchor value for scroll-percent math (e.g. `size - 1` for bytes,
+    /// `line_count - 1` for display-line viewers). Override for `DisplayLine` plugins.
+    fn scroll_extent(&self, info: &FileInfo) -> u64 {
+        match self.position_kind() {
+            PositionKind::Byte | PositionKind::Frame => info.size.saturating_sub(1),
+            PositionKind::DisplayLine => 1,
+        }
+    }
+
     /// Render a viewport for the interactive TUI (primary path).
     ///
     /// Built-in and plugin viewers should override this when possible. The default
@@ -81,7 +90,24 @@ pub trait FileViewer: Send + Sync {
             lines,
             status,
             anchor,
+            source_byte: match anchor {
+                ViewAnchor::Byte(b) => Some(b),
+                _ => None,
+            },
         }
+    }
+
+    /// Source file byte offset for the current anchor (for Text/Hex/JSON sync).
+    fn source_byte_for_anchor(&self, info: &FileInfo, anchor: ViewAnchor) -> Option<u64> {
+        match anchor {
+            ViewAnchor::Byte(b) => Some(b.min(info.size.saturating_sub(1))),
+            _ => None,
+        }
+    }
+
+    /// Display-line anchor for a source byte (display-line viewers only).
+    fn display_line_for_byte(&self, _info: &FileInfo, _byte: u64) -> Option<u64> {
+        None
     }
 
     /// Advance scroll position by display rows according to this viewer's model.

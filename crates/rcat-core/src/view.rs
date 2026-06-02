@@ -99,6 +99,8 @@ pub struct ViewportResult {
     pub lines: Vec<String>,
     pub status: String,
     pub anchor: ViewAnchor,
+    /// Source file byte offset for cross-viewer sync (when known).
+    pub source_byte: Option<u64>,
 }
 
 impl ViewportResult {
@@ -109,6 +111,7 @@ impl ViewportResult {
             )],
             status: format!("{viewer_name} @ {}", anchor.raw()),
             anchor,
+            source_byte: None,
         }
     }
 }

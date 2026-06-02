@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "JSON pretty-printing viewer for rcat (external plugin)"
 
+[lib]
+name = "rcat_viewers_json"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rcat-viewer-json"
 path = "src/main.rs"

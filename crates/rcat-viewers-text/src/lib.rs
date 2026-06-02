@@ -196,7 +196,7 @@ impl FileViewer for TextViewer {
             ((pos as f64 / info.size as f64) * 100.0) as u32
         };
         trace!(pos, pct, "TextViewer::status");
-        format!("Text  0x{:08x} / {:>3}%", pos, pct)
+        format!("Text  {} / {} B ({pct}%)", pos, info.size)
     }
 }
 

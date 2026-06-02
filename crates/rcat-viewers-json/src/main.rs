@@ -1,7 +1,7 @@
-//! rcat-viewer-json — External plugin for viewing JSON files.
+//! rcat-viewer-json — External plugin binary for viewing JSON files.
 
 use std::fs::OpenOptions;
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use rcat_core::FileViewer;
@@ -13,7 +13,7 @@ use rcat_core::plugin::{
 };
 use rcat_core::view::PositionKind;
 use rcat_core::viewer::ViewerPriority;
-use serde_json::{Value, from_slice, to_string_pretty};
+use rcat_viewers_json::JsonViewerLogic;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
@@ -21,8 +21,6 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
-    // Host-driven protocol: spawned as `rcat-viewer-json` with JSON on stdin (no subcommand).
-    // Interactive use with no args: show help instead of waiting on stdin.
     if args.len() == 1 {
         if io::stdin().is_terminal() {
             print_usage_and_exit();
@@ -47,7 +45,6 @@ fn main() {
         return;
     }
 
-    // Unknown subcommand — if stdin is piped, try protocol (defensive).
     if !io::stdin().is_terminal() {
         if let Err(e) = run_protocol_once() {
             tracing::error!("Protocol error: {e}");
@@ -122,7 +119,7 @@ fn init_logging() {
 fn print_plugin_info() {
     let info = PluginInfo {
         name: "JSON".to_string(),
-        version: "0.3.0".to_string(),
+        version: "0.3.1".to_string(),
         protocol_version: "1".to_string(),
         capabilities: vec![
             PluginCapability::CanHandle,
@@ -148,7 +145,6 @@ fn handle_dump(path: &str, opts: &DumpOptions) -> io::Result<()> {
     viewer.dump(&info, &mut stdout, opts)
 }
 
-/// Read one JSON line from stdin, write one JSON line to stdout, exit.
 fn run_protocol_once() -> io::Result<()> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -218,6 +214,16 @@ fn handle_request(request: &PluginRequest) -> io::Result<PluginResponse> {
             PluginResponse::StatusResult { status }
         }
 
+        PluginRequest::ByteAtDisplayLine { file_path, line } => {
+            let byte_offset = logic.byte_at_display_line(Path::new(file_path), *line)?;
+            PluginResponse::ByteAtDisplayLineResult { byte_offset }
+        }
+
+        PluginRequest::DisplayLineAtByte { file_path, byte } => {
+            let line = logic.display_line_at_byte(Path::new(file_path), *byte)?;
+            PluginResponse::DisplayLineAtByteResult { line }
+        }
+
         PluginRequest::Dump {
             file_path,
             offset,
@@ -248,100 +254,4 @@ fn looks_like_json_data(data: &[u8]) -> bool {
     let s = String::from_utf8_lossy(data);
     let trimmed = s.trim_start();
     trimmed.starts_with('{') || trimmed.starts_with('[')
-}
-
-struct JsonViewerLogic;
-
-impl JsonViewerLogic {
-    fn pretty_lines_from_path(&self, path: &Path) -> io::Result<Vec<String>> {
-        let info = FileInfo::from_path(path)?;
-        if info.size == 0 {
-            return Ok(vec!["(empty file)".to_string()]);
-        }
-
-        let mut file = std::fs::File::open(path)?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
-
-        let pretty = match from_slice::<Value>(&buf) {
-            Ok(value) => to_string_pretty(&value)
-                .unwrap_or_else(|_| String::from_utf8_lossy(&buf).into_owned()),
-            Err(_) => {
-                let mut s = String::from_utf8_lossy(&buf).into_owned();
-                s.insert_str(0, "(not valid JSON — showing raw)\n");
-                s
-            }
-        };
-
-        Ok(pretty.lines().map(|l| l.to_string()).collect())
-    }
-
-    fn line_count(&self, path: &Path) -> io::Result<usize> {
-        Ok(self.pretty_lines_from_path(path)?.len().max(1))
-    }
-
-    fn render_lines_at(
-        &self,
-        path: &Path,
-        start_offset: u64,
-        max_rows: u16,
-    ) -> io::Result<Vec<String>> {
-        let all = self.pretty_lines_from_path(path)?;
-        let start = start_offset as usize;
-        let lines: Vec<String> = all
-            .iter()
-            .skip(start)
-            .take(max_rows as usize)
-            .cloned()
-            .collect();
-        Ok(if lines.is_empty() {
-            vec!["(end of file)".to_string()]
-        } else {
-            lines
-        })
-    }
-
-    fn advance_lines_at(&self, path: &Path, current: u64, delta: i64) -> io::Result<u64> {
-        let total = self.line_count(path)?;
-        let max_pos = total.saturating_sub(1) as u64;
-        let new_pos = (current as i64 + delta).max(0) as u64;
-        Ok(new_pos.min(max_pos))
-    }
-
-    fn status_at(&self, path: &Path, position: u64) -> io::Result<String> {
-        let total = self.line_count(path)?;
-        let pct = if total == 0 {
-            0
-        } else {
-            ((position as f64 / total as f64) * 100.0) as u32
-        };
-        Ok(format!(
-            "JSON  line {}/{} ({pct}%)",
-            position + 1,
-            total.max(1)
-        ))
-    }
-}
-
-impl FileViewer for JsonViewerLogic {
-    fn name(&self) -> &'static str {
-        "JSON"
-    }
-
-    fn can_handle(&self, _probe: &mut dyn rcat_core::probe::FileProbe) -> ViewerPriority {
-        ViewerPriority::Preferred
-    }
-
-    fn dump(&self, info: &FileInfo, writer: &mut dyn Write, opts: &DumpOptions) -> io::Result<()> {
-        let all = self.pretty_lines_from_path(&info.path)?;
-        let start = opts.offset as usize;
-        let end = match opts.length {
-            Some(len) => (start + len as usize).min(all.len()),
-            None => all.len(),
-        };
-        for line in &all[start..end] {
-            writeln!(writer, "{line}")?;
-        }
-        Ok(())
-    }
 }

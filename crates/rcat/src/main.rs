@@ -9,6 +9,7 @@ use rcat_core::plugin::PluginCapability;
 use rcat_core::probe::{FileProbeWithInfo, PrefixProbe};
 use rcat_core::{ViewerRegistry, dump};
 use rcat_viewers_hex::HexViewer;
+use rcat_viewers_json::JsonViewerLogic;
 use rcat_viewers_text::TextViewer;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
@@ -194,6 +195,7 @@ fn build_registry(app_config: &rcat_cli::config::RcatConfig) -> anyhow::Result<V
     let mut registry = ViewerRegistry::new();
     registry.register(Box::new(TextViewer));
     registry.register(Box::new(HexViewer));
+    registry.register(Box::new(JsonViewerLogic));
 
     let search_paths = rcat_cli::plugin_discovery::plugin_search_paths();
     let discovered = rcat_cli::plugin_discovery::discover_plugins(&search_paths);
@@ -212,6 +214,13 @@ fn build_registry(app_config: &rcat_cli::config::RcatConfig) -> anyhow::Result<V
                     && (meta.capabilities.contains(&PluginCapability::Dump)
                         || meta.capabilities.contains(&PluginCapability::RenderLines));
                 if usable {
+                    if meta.name == "JSON" && registry.index_of("JSON").is_some() {
+                        tracing::debug!(
+                            path = %plugin_path.display(),
+                            "skipping external JSON plugin (in-process JSON viewer registered)"
+                        );
+                        continue;
+                    }
                     tracing::debug!(
                         name = %meta.name,
                         version = %meta.version,

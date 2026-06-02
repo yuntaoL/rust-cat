@@ -35,6 +35,37 @@ pub fn position_percent(offset: u64, size: u64) -> u8 {
     ((offset.saturating_mul(100)) / size).min(100) as u8
 }
 
+/// Scroll position as 0–100% within a viewer-specific extent (e.g. display lines).
+pub fn position_percent_in_extent(anchor: u64, extent: u64) -> u8 {
+    if extent == 0 {
+        return 0;
+    }
+    ((anchor.saturating_mul(100)) / extent).min(100) as u8
+}
+
+/// Header position label for the active viewer.
+pub fn format_header_position(
+    kind: rcat_core::PositionKind,
+    anchor_raw: u64,
+    file_size: u64,
+    scroll_extent: u64,
+) -> String {
+    match kind {
+        rcat_core::PositionKind::Byte => {
+            let pct = position_percent(anchor_raw, file_size);
+            format!("byte {anchor_raw} / {file_size} B ({pct}%)")
+        }
+        rcat_core::PositionKind::DisplayLine => {
+            let pct = position_percent_in_extent(anchor_raw, scroll_extent);
+            format!("line {} ({pct}%)", anchor_raw + 1)
+        }
+        rcat_core::PositionKind::Frame => {
+            let pct = position_percent_in_extent(anchor_raw, scroll_extent);
+            format!("frame {} ({pct}%)", anchor_raw)
+        }
+    }
+}
+
 /// Read up to 16 bytes from the start of the file for the magic preview.
 pub fn magic_hex_preview(path: &Path) -> String {
     let mut file = match File::open(path) {
@@ -116,6 +147,18 @@ mod tests {
         assert_eq!(position_percent(0, 100), 0);
         assert_eq!(position_percent(50, 100), 50);
         assert_eq!(position_percent(100, 100), 100);
+    }
+
+    #[test]
+    fn position_percent_in_extent_works() {
+        assert_eq!(position_percent_in_extent(221, 438), 50);
+    }
+
+    #[test]
+    fn header_position_display_line() {
+        let s = format_header_position(rcat_core::PositionKind::DisplayLine, 220, 10_000, 438);
+        assert!(s.contains("line 221"));
+        assert!(s.contains("50%"));
     }
 
     #[test]

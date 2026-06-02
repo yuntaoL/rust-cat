@@ -248,19 +248,64 @@ impl FileViewer for ExternalPluginViewer {
         self.info.position_kind.unwrap_or(PositionKind::Byte)
     }
 
+    fn scroll_extent(&self, info: &FileInfo) -> u64 {
+        match self.position_kind() {
+            PositionKind::DisplayLine => {
+                if self.has_capability(PluginCapability::RenderLines) {
+                    let status = self.status(info, 0);
+                    crate::scroll::parse_display_line_extent_from_status(&status).unwrap_or(1)
+                } else {
+                    1
+                }
+            }
+            PositionKind::Byte | PositionKind::Frame => info.size.saturating_sub(1),
+        }
+    }
+
     fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
         let anchor = ctx.anchor;
-        let lines = self.render_lines(
-            ctx.info(),
-            ctx.anchor_raw(),
-            ctx.max_rows,
-            ctx.content_width,
-        );
-        let status = self.status(ctx.info(), ctx.anchor_raw());
+        let info = ctx.info();
+        let lines = self.render_lines(info, ctx.anchor_raw(), ctx.max_rows, ctx.content_width);
+        let status = self.status(info, ctx.anchor_raw());
+        let source_byte = self.source_byte_for_anchor(info, anchor);
         ViewportResult {
             lines,
             status,
             anchor,
+            source_byte,
+        }
+    }
+
+    fn source_byte_for_anchor(&self, info: &FileInfo, anchor: ViewAnchor) -> Option<u64> {
+        match anchor {
+            ViewAnchor::Byte(b) => Some(b.min(info.size.saturating_sub(1))),
+            ViewAnchor::DisplayLine(line) => {
+                let request = PluginRequest::ByteAtDisplayLine {
+                    file_path: path_str(info),
+                    line,
+                };
+                match self.invoke(request) {
+                    Ok(PluginResponse::ByteAtDisplayLineResult { byte_offset }) => {
+                        Some(byte_offset.min(info.size.saturating_sub(1)))
+                    }
+                    _ => None,
+                }
+            }
+            ViewAnchor::Frame(_) => None,
+        }
+    }
+
+    fn display_line_for_byte(&self, info: &FileInfo, byte: u64) -> Option<u64> {
+        if self.position_kind() != PositionKind::DisplayLine {
+            return None;
+        }
+        let request = PluginRequest::DisplayLineAtByte {
+            file_path: path_str(info),
+            byte: byte.min(info.size.saturating_sub(1)),
+        };
+        match self.invoke(request) {
+            Ok(PluginResponse::DisplayLineAtByteResult { line }) => Some(line),
+            _ => None,
         }
     }
 

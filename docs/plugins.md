@@ -28,6 +28,8 @@ The host runs `path/to/rcat-viewer-foo` **with no CLI arguments** and sends a si
 | `advance_lines` | Scroll position (`current`, `delta`) |
 | `status` | Footer text for current position |
 | `dump` | Non-interactive output (`offset`, `length`) |
+| `byte_at_display_line` | Source byte offset for pretty-print line index (JSON ↔ Text/Hex sync) |
+| `display_line_at_byte` | Display line index for a source byte offset |
 
 ### Offset semantics
 

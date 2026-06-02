@@ -57,7 +57,7 @@ fn hex_status(size: u64, pos: u64) -> String {
     } else {
         ((pos as f64 / size as f64) * 100.0) as u32
     };
-    format!("Hex  0x{pos:08x} / {pct:>3}%")
+    format!("Hex  0x{pos:08X} · {pos} / {size} B ({pct}%)", size = size)
 }
 
 /// The built-in viewer for binary / hex data.
@@ -116,6 +116,7 @@ impl FileViewer for HexViewer {
             lines,
             status,
             anchor,
+            source_byte: Some(start_offset.min(info.size.saturating_sub(1))),
         }
     }
 

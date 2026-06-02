@@ -114,6 +114,12 @@ pub enum PluginRequest {
         offset: u64,
         length: Option<u64>,
     },
+
+    /// Source file byte offset for a pretty-printed display line (JSON sync).
+    ByteAtDisplayLine { file_path: String, line: u64 },
+
+    /// Display line index closest to a source byte offset (JSON sync).
+    DisplayLineAtByte { file_path: String, byte: u64 },
 }
 
 /// Response from plugin to host.
@@ -126,22 +132,42 @@ pub enum PluginResponse {
     },
 
     /// Data returned for a `ReadBytes` request.
-    ReadBytesResult { data: Vec<u8> },
+    ReadBytesResult {
+        data: Vec<u8>,
+    },
 
     /// Lines to display in the TUI content area.
-    RenderLinesResult { lines: Vec<String> },
+    RenderLinesResult {
+        lines: Vec<String>,
+    },
 
     /// New viewport position after `AdvanceLines`.
-    AdvanceLinesResult { position: u64 },
+    AdvanceLinesResult {
+        position: u64,
+    },
 
     /// Status text for the footer (viewer may include offset / line hints).
-    StatusResult { status: String },
+    StatusResult {
+        status: String,
+    },
 
     /// UTF-8 dump output for `Dump` requests.
-    DumpResult { output: String },
+    DumpResult {
+        output: String,
+    },
+
+    ByteAtDisplayLineResult {
+        byte_offset: u64,
+    },
+
+    DisplayLineAtByteResult {
+        line: u64,
+    },
 
     /// Generic error.
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// Default timeout for external plugin subprocesses.

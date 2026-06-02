@@ -7,7 +7,7 @@ mod theme;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use metadata::{build_metadata_lines, position_percent};
+use metadata::build_metadata_lines;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -96,6 +96,33 @@ mod tests {
             rcat_core::PositionKind::DisplayLine
         }
 
+        fn scroll_extent(&self, _info: &FileInfo) -> u64 {
+            self.total_lines.saturating_sub(1).max(1) as u64
+        }
+
+        fn source_byte_for_anchor(&self, info: &FileInfo, anchor: ViewAnchor) -> Option<u64> {
+            match anchor {
+                ViewAnchor::Byte(b) => Some(b.min(info.size.saturating_sub(1))),
+                ViewAnchor::DisplayLine(line) => {
+                    let extent = self.scroll_extent(info);
+                    Some(rcat_core::anchor_from_fraction(
+                        rcat_core::scroll_fraction(line, extent),
+                        info.size.saturating_sub(1),
+                    ))
+                }
+                ViewAnchor::Frame(_) => None,
+            }
+        }
+
+        fn display_line_for_byte(&self, info: &FileInfo, byte: u64) -> Option<u64> {
+            let extent = self.scroll_extent(info);
+            let file_extent = info.size.saturating_sub(1).max(1);
+            Some(rcat_core::anchor_from_fraction(
+                rcat_core::scroll_fraction(byte.min(file_extent), file_extent),
+                extent,
+            ))
+        }
+
         fn name(&self) -> &'static str {
             self.name
         }
@@ -169,6 +196,97 @@ mod tests {
         assert_eq!(app.offset(), 6);
     }
 
+    fn write_multi_line_json(path: &std::path::Path) {
+        let mut obj = String::from("{");
+        for i in 0..40 {
+            if i > 0 {
+                obj.push(',');
+            }
+            obj.push_str(&format!("\n  \"entry{i:02}\": {i}"));
+        }
+        obj.push_str("\n}\n");
+        std::fs::write(path, obj).unwrap();
+    }
+
+    #[test]
+    fn toggle_text_to_json_preserves_mid_file_position() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        write_multi_line_json(f.path());
+        let raw = std::fs::read(f.path()).unwrap();
+        let mid_byte = (raw.len() / 2) as u64;
+
+        let session = FileSession::open(f.path()).unwrap();
+        let mut app = App::new(
+            session,
+            vec![
+                Box::new(rcat_viewers_text::TextViewer),
+                Box::new(rcat_viewers_json::JsonViewerLogic),
+            ],
+            0,
+            mid_byte,
+        );
+
+        assert_eq!(app.offset(), mid_byte);
+        app.apply(TuiAction::ToggleViewer, 80);
+        assert_eq!(app.active_viewer_name(), "JSON");
+        assert!(
+            app.offset() > 0,
+            "JSON display line should be > 0 when switching from mid-file text byte {mid_byte}"
+        );
+    }
+
+    #[test]
+    fn toggle_hex_to_json_preserves_mid_file_position() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        write_multi_line_json(f.path());
+        let raw = std::fs::read(f.path()).unwrap();
+        let mid_byte = (raw.len() / 2) as u64;
+
+        let session = FileSession::open(f.path()).unwrap();
+        let mut app = App::new(
+            session,
+            vec![
+                Box::new(rcat_viewers_hex::HexViewer),
+                Box::new(rcat_viewers_json::JsonViewerLogic),
+            ],
+            0,
+            mid_byte,
+        );
+
+        app.apply(TuiAction::ToggleViewer, 80);
+        assert_eq!(app.active_viewer_name(), "JSON");
+        assert!(
+            app.offset() > 0,
+            "JSON line should follow mid-file hex position"
+        );
+    }
+
+    #[test]
+    fn toggle_viewer_maps_display_line_fraction_to_byte_offset() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let data = vec![0u8; 1000];
+        std::io::Write::write_all(&mut f, &data).unwrap();
+        let session = FileSession::open(f.path()).unwrap();
+
+        let mut app = App::new(
+            session,
+            vec![
+                Box::new(TestViewer::new("Line", 100)),
+                Box::new(rcat_viewers_hex::HexViewer),
+            ],
+            0,
+            50,
+        );
+
+        app.apply(TuiAction::ToggleViewer, 80);
+        let byte_pos = app.offset();
+        // line 50 of 99 ≈ 50% → ~500 bytes in a 1000-byte file
+        assert!(
+            (450..=550).contains(&byte_pos),
+            "expected ~50% byte offset, got {byte_pos}"
+        );
+    }
+
     #[test]
     fn toggle_viewer_cycles_and_preserves_offset() {
         let session = make_test_session();
@@ -195,14 +313,14 @@ mod tests {
     #[test]
     fn render_app_produces_expected_lines() {
         let session = make_test_session();
-        let app = App::new(session, vec![Box::new(TestViewer::new("Test", 10))], 0, 2);
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 10))], 0, 2);
 
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                render_app(f, &app, 36);
+                render_app(f, &mut app, 36);
             })
             .unwrap();
 
@@ -234,14 +352,14 @@ mod tests {
     #[test]
     fn render_respects_content_width() {
         let session = make_test_session();
-        let app = App::new(session, vec![Box::new(TestViewer::new("Test", 5))], 0, 0);
+        let mut app = App::new(session, vec![Box::new(TestViewer::new("Test", 5))], 0, 0);
 
         let backend = TestBackend::new(20, 6);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                render_app(f, &app, 16); // narrow width
+                render_app(f, &mut app, 16); // narrow width
             })
             .unwrap();
 
@@ -363,7 +481,7 @@ mod tests {
 
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render_app(f, &app, 60)).unwrap();
+        terminal.draw(|f| render_app(f, &mut app, 60)).unwrap();
         let content: String = terminal
             .backend()
             .buffer()
@@ -399,6 +517,8 @@ struct App {
     viewers: Vec<Box<dyn rcat_core::FileViewer>>,
     viewer_index: usize,
     anchor: ViewAnchor,
+    /// Canonical source-file byte position for Text/Hex/JSON sync.
+    byte_position: u64,
     show_help: bool,
     show_metadata: bool,
     theme: Theme,
@@ -421,14 +541,48 @@ impl App {
             .get(viewer_index)
             .map(|v| v.position_kind())
             .unwrap_or(rcat_core::PositionKind::Byte);
+        let byte_position = match kind {
+            rcat_core::PositionKind::Byte => offset,
+            _ => 0,
+        };
         Self {
             session,
             viewers,
             viewer_index,
             anchor: ViewAnchor::from_raw(kind, offset),
+            byte_position,
             show_help: false,
             show_metadata: false,
             theme: Theme::default(),
+        }
+    }
+
+    fn sync_byte_position(&mut self) {
+        let viewer = &self.viewers[self.viewer_index];
+        let info = self.session.info();
+        if let Some(b) = viewer.source_byte_for_anchor(info, self.anchor) {
+            self.byte_position = b;
+        }
+    }
+
+    fn anchor_for_byte_in_viewer(&self, viewer_index: usize, byte: u64) -> ViewAnchor {
+        let viewer = &self.viewers[viewer_index];
+        let info = self.session.info();
+        let byte = byte.min(self.session.size().saturating_sub(1));
+        match viewer.position_kind() {
+            rcat_core::PositionKind::Byte | rcat_core::PositionKind::Frame => {
+                ViewAnchor::from_raw(viewer.position_kind(), byte)
+            }
+            rcat_core::PositionKind::DisplayLine => viewer
+                .display_line_for_byte(info, byte)
+                .map(|line| ViewAnchor::DisplayLine(line))
+                .unwrap_or_else(|| {
+                    let extent = viewer.scroll_extent(info);
+                    ViewAnchor::DisplayLine(rcat_core::anchor_from_fraction(
+                        rcat_core::scroll_fraction(byte, self.session.size().saturating_sub(1)),
+                        extent,
+                    ))
+                }),
         }
     }
 
@@ -489,6 +643,7 @@ impl App {
             TuiAction::GoToStart => {
                 let kind = self.active_viewer().position_kind();
                 self.anchor = ViewAnchor::from_raw(kind, 0);
+                self.byte_position = 0;
             }
             TuiAction::GoToEnd => {
                 let kind = self.active_viewer().position_kind();
@@ -498,12 +653,8 @@ impl App {
                     PositionKind::Byte => self.session.size(),
                     PositionKind::DisplayLine | PositionKind::Frame => u64::MAX / 2,
                 };
-                let end_ctx = ViewContext::new(
-                    &self.session,
-                    ViewAnchor::from_raw(kind, jump),
-                    width,
-                    1,
-                );
+                let end_ctx =
+                    ViewContext::new(&self.session, ViewAnchor::from_raw(kind, jump), width, 1);
                 self.anchor = self.active_viewer().advance_anchor(&end_ctx, -8);
             }
             TuiAction::ToggleHelp => {
@@ -511,14 +662,17 @@ impl App {
             }
             TuiAction::ToggleViewer => {
                 if self.viewers.len() > 1 {
-                    self.viewer_index = (self.viewer_index + 1) % self.viewers.len();
-                    let kind = self.active_viewer().position_kind();
-                    self.anchor = ViewAnchor::from_raw(kind, self.anchor.raw());
+                    self.sync_byte_position();
+
+                    let new_index = (self.viewer_index + 1) % self.viewers.len();
+                    let to_name = self.viewers[new_index].name();
+                    self.viewer_index = new_index;
+                    self.anchor = self.anchor_for_byte_in_viewer(new_index, self.byte_position);
                     debug!(
-                        viewer = self.active_viewer().name(),
+                        viewer = to_name,
                         anchor = self.anchor.raw(),
-                        ?kind,
-                        "switched viewer (anchor value preserved)"
+                        byte = self.byte_position,
+                        "switched viewer (anchor mapped via source byte)"
                     );
                 }
             }
@@ -527,9 +681,11 @@ impl App {
             }
         }
         if self.anchor != old_anchor {
+            self.sync_byte_position();
             trace!(
                 old = old_anchor.raw(),
                 new = self.anchor.raw(),
+                byte = self.byte_position,
                 "anchor changed"
             );
         }
@@ -622,7 +778,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
 /// Extracted pure rendering logic. This is the key enabler for testing the UI
 /// with `ratatui::backend::TestBackend` without any real terminal or crossterm.
-fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
+fn render_app(f: &mut ratatui::Frame, app: &mut App, usable_width: u16) {
     let theme = app.theme;
     let viewer = app.active_viewer();
 
@@ -646,13 +802,18 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
         viewer.name().to_string()
     };
     let anchor_raw = app.anchor.raw();
-    let pct = position_percent(anchor_raw, app.session.size());
+    let scroll_extent = viewer.scroll_extent(app.info());
+    let pos_label = metadata::format_header_position(
+        viewer.position_kind(),
+        anchor_raw,
+        app.session.size(),
+        scroll_extent,
+    );
     let header_text = format!(
-        " {}  ·  {}  ·  {}  ·  offset 0x{:X} ({pct}%)",
+        " {}  ·  {}  ·  {}  ·  {pos_label}",
         app.session.path().display(),
         metadata::format_file_size(app.session.size()),
         viewer_label,
-        anchor_raw
     );
     let header = Paragraph::new(header_text).style(theme.header).block(
         Block::default()
@@ -689,17 +850,17 @@ fn render_app(f: &mut ratatui::Frame, app: &App, usable_width: u16) {
         .wrap(Wrap { trim: false });
     f.render_widget(content, content_area);
 
+    if let Some(b) = viewport.source_byte {
+        app.byte_position = b;
+    }
+
     let viewer_status = viewport.status;
-    let pct = position_percent(anchor_raw, app.session.size());
     let mut hints = vec!["q quit", "m meta", "? help"];
     if app.viewers.len() > 1 {
         hints.insert(1, "Tab/h viewer");
     }
-    let footer_text = format!(
-        " {viewer_status}  ·  0x{:X} ({pct}%)  │  {}",
-        anchor_raw,
-        hints.join("  ")
-    );
+    // Viewer status already has position (dec for Text, hex+dec for Hex, lines for JSON).
+    let footer_text = format!(" {viewer_status}  │  {}", hints.join("  "));
     let footer = Paragraph::new(footer_text).style(theme.footer).block(
         Block::default()
             .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
