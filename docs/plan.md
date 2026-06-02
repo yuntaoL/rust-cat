@@ -7,7 +7,7 @@
 **Project**: `rust-cat` (binary name: `rcat`)  
 **Location**: `/Users/yuntaolu/dev/rust/rust-cat`  
 **Date**: 2026-06-02 (last major update)  
-**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **Milestone M1 complete** (2026-06-02): byte-synced Text/Hex/JSON, raw JSON view (no reformat), `.json` auto-selects JSON viewer, **75% line coverage** enforced in CI. **PR1 done**. **Next: PR2** (dirty TUI redraw + viewport cache). JSON **interactive** view is raw+highlight today; **PR5** adds optional streaming pretty-print tiers.
+**Status**: Phases 0–3 **complete**. Phase 4 UX polish **largely complete**. Phase 5 foundation **complete**. **M1 done** (viewer correctness + 75% coverage). **PR1 done**. **PR2 done** (dirty redraw + viewport cache). **Next: PR3** (protocol v2 + `ReadBytes` + session subprocess). JSON interactive view is raw+highlight; **PR5** adds optional streaming pretty-print tiers.
 
 ## Quick Navigation
 
@@ -664,16 +664,15 @@ By the end of Phase 0 the repository should look like a mature, inviting open-so
 |----|--------|--------|----------------|
 | **PR1** | `FileSession` + `ViewContext` + `render_viewport` | **Done** | `90705e6` — `session.rs`, `view.rs`; Hex via `session.slice()`; TUI uses `ViewportResult` |
 | **M1** | Viewer correctness + test baseline | **Done** | `2178c3d`+ — raw JSON, byte sync across viewers, path-based JSON selection, 75% coverage gate |
-| **PR2** | Dirty TUI redraw + viewport cache | **Next** | Stop ~20 plugin spawns/sec on idle; cache `(viewer, anchor, width, height)` |
-| **PR3** | Protocol v2 skeleton + session subprocess | Pending | `Open` → `ReadBytes` / `RenderViewport` → `Close`; document in `docs/plugins.md` |
+| **PR2** | Dirty TUI redraw + viewport cache | **Done** | `needs_redraw` + `ViewportCache` key `(viewer, anchor, width, rows)`; idle poll skips draw/render |
+| **PR3** | Protocol v2 skeleton + session subprocess | **Next** | `Open` → `ReadBytes` / `RenderViewport` → `Close`; document in `docs/plugins.md` |
 | **PR4** | Text + Hex on session only | Pending | Text: stop re-`open` per frame; shared `LineIndex` (host) |
 | **PR5** | JSON plugin tiers + ambitious streaming | Pending | See JSON strategy below |
 
-### Known gaps (pre-PR2)
+### Known gaps (pre-PR3)
 
 | Area | Issue |
 |------|--------|
-| TUI loop | Redraws every ~50 ms; calls `render_viewport` every frame (no dirty cache yet) |
 | Text viewer | Re-opens file; does not use `FileSession` slice API |
 | Plugins | One-shot subprocess per request; `ReadBytes` unused |
 | JSON pretty-print | Deferred to PR5; interactive path is raw file + syntax colors (M1) |
@@ -840,7 +839,18 @@ See [Section 15](#15-execution-track-unified-session--large-files-pr1pr5) for th
 - PR1 session/viewport (`90705e6`)
 - This commit: default JSON selection, 75% threshold, test expansion
 
-**Next step:** **PR2** — dirty-flag TUI redraw and viewport cache so idle frames do not respawn plugins or re-render unchanged viewports.
+---
+
+### 2026-06-02 — PR2: Dirty TUI redraw + viewport cache
+
+**Completed:**
+
+- `ViewportCache` keyed by `(viewer_index, anchor_raw, content_width, max_rows)`.
+- `App::needs_redraw`: draw only when input, resize, or viewport invalidated; idle 50 ms poll no longer calls `render_viewport`.
+- Help overlay toggles redraw without invalidating viewport cache; scroll/viewer/metadata/resize invalidate cache.
+- Tests: cache hit/miss, help without extra render, cache module unit tests.
+
+**Next:** **PR3** — protocol v2 + long-lived plugin subprocess + `ReadBytes`.
 
 ---
 
@@ -863,8 +873,8 @@ If you are looking for the concrete work breakdown per phase, jump directly to *
 | Priority | Task | Status |
 |----------|------|--------|
 | — | **M1** — Viewer correctness + 75% coverage | **Done** |
-| 1 | **PR2** — Dirty TUI redraw + viewport cache | **Next** |
-| 2 | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | Pending |
+| — | **PR2** — Dirty TUI redraw + viewport cache | **Done** |
+| 1 | **PR3** — Protocol v2 + `ReadBytes` + session subprocess | **Next** |
 | 3 | **PR4** — Text/Hex session-only I/O + line index | Pending |
 | 4 | **PR5** — JSON ambitious streaming + tier fallbacks | Pending |
 | 5 | v0.1 release checklist (large-file manual tests, README) | After PR5 |

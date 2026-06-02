@@ -4,6 +4,7 @@ mod metadata;
 mod styling;
 mod terminal;
 mod theme;
+mod viewport_cache;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -16,7 +17,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use rcat_core::file_info::FileInfo;
-use rcat_core::{FileSession, PositionKind, ViewAnchor, ViewContext};
+use rcat_core::{FileSession, PositionKind, ViewAnchor, ViewContext, ViewportResult};
+use viewport_cache::{ViewportCache, ViewportCacheKey};
 use std::io::{self, stdout};
 use styling::render_content_lines;
 use terminal::TerminalGuard;
@@ -77,11 +79,20 @@ mod tests {
     struct TestViewer {
         name: &'static str,
         total_lines: usize,
+        render_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl TestViewer {
         fn new(name: &'static str, total_lines: usize) -> Self {
-            Self { name, total_lines }
+            Self {
+                name,
+                total_lines,
+                render_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+
+        fn render_calls_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+            std::sync::Arc::clone(&self.render_calls)
         }
     }
 
@@ -169,12 +180,78 @@ mod tests {
         fn status(&self, _info: &FileInfo, pos: u64) -> String {
             format!("Test @ {}", pos)
         }
+
+        fn render_viewport(&self, ctx: &ViewContext) -> ViewportResult {
+            self.render_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let anchor = ctx.anchor;
+            let raw = ctx.anchor_raw();
+            let lines = self.render_lines(ctx.info(), raw, ctx.max_rows, ctx.content_width);
+            let status = self.status(ctx.info(), raw);
+            ViewportResult {
+                lines,
+                status,
+                anchor,
+                source_byte: None,
+            }
+        }
     }
 
     fn make_test_session() -> FileSession {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut f, b"hello world\n").unwrap();
         FileSession::open(f.path()).unwrap()
+    }
+
+    #[test]
+    fn viewport_cache_reuses_render_on_identical_request() {
+        let session = make_test_session();
+        let viewer = TestViewer::default();
+        let calls = viewer.render_calls_handle();
+        let mut app = App::new(session, vec![Box::new(viewer)], 0, 0);
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "second identical request must hit cache"
+        );
+    }
+
+    #[test]
+    fn viewport_cache_miss_after_scroll() {
+        let session = make_test_session();
+        let viewer = TestViewer::default();
+        let calls = viewer.render_calls_handle();
+        let mut app = App::new(session, vec![Box::new(viewer)], 0, 0);
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        app.apply(TuiAction::ScrollDown(1), 80);
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "scroll must invalidate cache"
+        );
+    }
+
+    #[test]
+    fn toggle_help_redraws_without_extra_viewport_render() {
+        let session = make_test_session();
+        let viewer = TestViewer::default();
+        let calls = viewer.render_calls_handle();
+        let mut app = App::new(session, vec![Box::new(viewer)], 0, 0);
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        app.apply(TuiAction::ToggleHelp, 80);
+        assert!(app.needs_redraw());
+        let _ = app.cached_viewport(80, 10);
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "help toggle should not invalidate viewport cache"
+        );
     }
 
     #[test]
@@ -524,6 +601,11 @@ struct App {
     show_help: bool,
     show_metadata: bool,
     theme: Theme,
+    /// Last terminal size (detect resize → invalidate viewport cache).
+    last_term_size: (u16, u16),
+    /// Screen needs redraw (input, resize, or viewport invalidated).
+    needs_redraw: bool,
+    viewport_cache: ViewportCache,
 }
 
 impl App {
@@ -556,7 +638,35 @@ impl App {
             show_help: false,
             show_metadata: false,
             theme: Theme::default(),
+            last_term_size: (0, 0),
+            needs_redraw: true,
+            viewport_cache: ViewportCache::default(),
         }
+    }
+
+    fn invalidate_viewport_cache(&mut self) {
+        self.viewport_cache.invalidate();
+    }
+
+    /// Returns a cached viewport or calls `render_viewport` on the active viewer.
+    fn cached_viewport(&mut self, content_width: u16, max_rows: u16) -> &ViewportResult {
+        let key = ViewportCacheKey {
+            viewer_index: self.viewer_index,
+            anchor_raw: self.anchor.raw(),
+            content_width,
+            max_rows,
+        };
+        if self.viewport_cache.get(key).is_none() {
+            let ctx = ViewContext::new(&self.session, self.anchor, content_width, max_rows);
+            let viewer = self.viewers[self.viewer_index].as_ref();
+            let viewport = viewer.render_viewport(&ctx);
+            self.viewport_cache.store(key, viewport);
+        } else {
+            trace!("viewport cache hit");
+        }
+        self.viewport_cache
+            .get(key)
+            .expect("cache populated above")
     }
 
     fn sync_byte_position(&mut self) {
@@ -601,6 +711,11 @@ impl App {
         self.show_metadata
     }
 
+    #[cfg(test)]
+    fn needs_redraw(&self) -> bool {
+        self.needs_redraw
+    }
+
     fn active_viewer(&self) -> &dyn rcat_core::FileViewer {
         self.viewers[self.viewer_index].as_ref()
     }
@@ -620,34 +735,41 @@ impl App {
     pub fn apply(&mut self, action: TuiAction, width: u16) {
         let old_anchor = self.anchor;
         let old_viewer = self.active_viewer().name().to_string();
+        let mut invalidate_viewport = false;
         match action {
             TuiAction::Quit => {}
             TuiAction::ScrollDown(n) => {
+                invalidate_viewport = true;
                 self.anchor = self
                     .active_viewer()
                     .advance_anchor(&self.scroll_ctx(width), n as i64);
             }
             TuiAction::ScrollUp(n) => {
+                invalidate_viewport = true;
                 self.anchor = self
                     .active_viewer()
                     .advance_anchor(&self.scroll_ctx(width), -(n as i64));
             }
             TuiAction::PageDown(n) => {
+                invalidate_viewport = true;
                 self.anchor = self
                     .active_viewer()
                     .advance_anchor(&self.scroll_ctx(width), n as i64);
             }
             TuiAction::PageUp(n) => {
+                invalidate_viewport = true;
                 self.anchor = self
                     .active_viewer()
                     .advance_anchor(&self.scroll_ctx(width), -(n as i64));
             }
             TuiAction::GoToStart => {
+                invalidate_viewport = true;
                 let kind = self.active_viewer().position_kind();
                 self.anchor = ViewAnchor::from_raw(kind, 0);
                 self.byte_position = 0;
             }
             TuiAction::GoToEnd => {
+                invalidate_viewport = true;
                 let kind = self.active_viewer().position_kind();
                 // Byte viewers: start from EOF. Line/frame viewers: start past the end
                 // so advance_lines clamps to the last display row (same as legacy behavior).
@@ -663,6 +785,7 @@ impl App {
                 self.show_help = !self.show_help;
             }
             TuiAction::ToggleViewer => {
+                invalidate_viewport = true;
                 if self.viewers.len() > 1 {
                     self.sync_byte_position();
 
@@ -679,8 +802,15 @@ impl App {
                 }
             }
             TuiAction::ToggleMetadata => {
+                invalidate_viewport = true;
                 self.show_metadata = !self.show_metadata;
             }
+        }
+        if invalidate_viewport {
+            self.invalidate_viewport_cache();
+        }
+        if !matches!(action, TuiAction::Quit) {
+            self.needs_redraw = true;
         }
         if self.anchor != old_anchor {
             self.sync_byte_position();
@@ -707,16 +837,15 @@ fn run_app<B: ratatui::backend::Backend>(
 ) -> io::Result<()> {
     loop {
         let term_size = terminal.size().unwrap_or_default();
+        if term_size.width != app.last_term_size.0 || term_size.height != app.last_term_size.1 {
+            app.last_term_size = (term_size.width, term_size.height);
+            app.invalidate_viewport_cache();
+            app.needs_redraw = true;
+        }
         let usable_width = term_size.width.saturating_sub(4).max(20);
         // Compute a sensible page size based on terminal height.
         // Leave a small overlap (2 lines) so the user doesn't lose context, which is standard pager behavior.
         let page_size = term_size.height.saturating_sub(7).max(5);
-
-        terminal
-            .draw(|f| {
-                render_app(f, app, usable_width);
-            })
-            .expect("failed to draw");
 
         // Input: map raw keys → TuiAction → apply (much easier to test)
         if event::poll(std::time::Duration::from_millis(50))?
@@ -730,11 +859,13 @@ fn run_app<B: ratatui::backend::Backend>(
                 match key.code {
                     KeyCode::Char('?') | KeyCode::Esc => {
                         app.show_help = false;
+                        app.needs_redraw = true;
                         continue;
                     }
                     KeyCode::Char('q') => return Ok(()), // allow explicit quit even from help
                     _ => {
                         app.show_help = false; // any other key closes help
+                        app.needs_redraw = true;
                         continue;
                     }
                 }
@@ -775,6 +906,15 @@ fn run_app<B: ratatui::backend::Backend>(
 
             app.apply(action, usable_width);
         }
+
+        if app.needs_redraw {
+            terminal
+                .draw(|f| {
+                    render_app(f, app, usable_width);
+                })
+                .expect("failed to draw");
+            app.needs_redraw = false;
+        }
     }
 }
 
@@ -782,7 +922,7 @@ fn run_app<B: ratatui::backend::Backend>(
 /// with `ratatui::backend::TestBackend` without any real terminal or crossterm.
 fn render_app(f: &mut ratatui::Frame, app: &mut App, usable_width: u16) {
     let theme = app.theme;
-    let viewer = app.active_viewer();
+    let viewer_name = app.active_viewer().name();
 
     let vertical = Layout::default()
         .direction(Direction::Vertical)
@@ -796,17 +936,17 @@ fn render_app(f: &mut ratatui::Frame, app: &mut App, usable_width: u16) {
     let viewer_label = if app.viewers.len() > 1 {
         format!(
             "{} ({}/{})",
-            viewer.name(),
+            viewer_name,
             app.viewer_index + 1,
             app.viewers.len()
         )
     } else {
-        viewer.name().to_string()
+        viewer_name.to_string()
     };
     let anchor_raw = app.anchor.raw();
-    let scroll_extent = viewer.scroll_extent(app.info());
+    let scroll_extent = app.active_viewer().scroll_extent(app.info());
     let pos_label = metadata::format_header_position(
-        viewer.position_kind(),
+        app.active_viewer().position_kind(),
         anchor_raw,
         app.session.size(),
         scroll_extent,
@@ -839,9 +979,14 @@ fn render_app(f: &mut ratatui::Frame, app: &mut App, usable_width: u16) {
     };
 
     let max_rows = content_area.height.saturating_sub(1).max(1);
-    let ctx = ViewContext::new(&app.session, app.anchor, content_width, max_rows);
-    let viewport = viewer.render_viewport(&ctx);
-    let content_lines = render_content_lines(viewer.name(), viewport.lines, &theme);
+    let (content_lines, viewer_status, source_byte) = {
+        let viewport = app.cached_viewport(content_width, max_rows);
+        (
+            render_content_lines(viewer_name, viewport.lines.clone(), &theme),
+            viewport.status.clone(),
+            viewport.source_byte,
+        )
+    };
 
     let content = Paragraph::new(content_lines)
         .block(
@@ -852,11 +997,9 @@ fn render_app(f: &mut ratatui::Frame, app: &mut App, usable_width: u16) {
         .wrap(Wrap { trim: false });
     f.render_widget(content, content_area);
 
-    if let Some(b) = viewport.source_byte {
+    if let Some(b) = source_byte {
         app.byte_position = b;
     }
-
-    let viewer_status = viewport.status;
     let mut hints = vec!["q quit", "m meta", "? help"];
     if app.viewers.len() > 1 {
         hints.insert(1, "Tab/h viewer");
