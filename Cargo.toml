@@ -39,7 +39,7 @@ memmap2 = "0.9"
 # Utilities
 directories = "6.0"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 
 # Logging (stderr only; never to stdout so JSON plugin protocol stays clean)
 tracing = "0.1"
