@@ -10,7 +10,7 @@ description = "Core domain types, file detection, and Viewer trait for rcat"
 memmap2 = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-infer = "0.19"   # Used for first-pass magic byte detection by the core
+infer = "0.22"   # Used for first-pass magic byte detection by the core
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = { workspace = true }
